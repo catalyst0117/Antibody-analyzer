@@ -253,7 +253,7 @@ def run_mannwhitney(
     result_df[result_df["mean_rank_diff"] < 0].to_csv(nc_file, index=False)
 
     return MannWhitneyResult(
-        k=len(kmers[0]) if kmers else 0,
+        k=len(kmers[0]) if not kmers.empty else 0,
         total_kmers=len(result_df),
         ad_elevated=int((result_df["mean_rank_diff"] > 0).sum()),
         nc_elevated=int((result_df["mean_rank_diff"] < 0).sum()),
@@ -274,6 +274,8 @@ def analyze_groups(
     workdir: Optional[Path] = None,
 ) -> List[MannWhitneyResult]:
     workdir = Path(workdir or input_path.parent)
+    workdir.mkdir(parents=True, exist_ok=True)  # <- critical fix
+
     wildcard_positions = list(wildcard_positions or [])
     results: List[MannWhitneyResult] = []
 
@@ -294,7 +296,7 @@ def analyze_groups(
 
         wildcard_label = ''.join(str(i) for i in wildcard_positions) or 'no_wildcards'
         matrix_file = workdir / f"{input_path.stem}_matrix_{k}mers_{wildcard_label}.csv"
-        matrix.to_csv(matrix_file)
+        matrix.to_csv(matrix_file, index=False)
 
         pos_cols = list(pos_dicts.keys())
         neg_cols = list(neg_dicts.keys())
@@ -304,7 +306,6 @@ def analyze_groups(
         results.append(result)
 
     return results
-
 
 __all__ = [
     "AA_BACKGROUND",

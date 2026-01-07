@@ -117,6 +117,7 @@ body {
 .section-card__header h2 {
   margin: 0;
   font-size: 1.35rem;
+  color: #000000;
 }
 
 .section-card__description {
@@ -143,6 +144,8 @@ body {
 
 .form-field span {
   font-weight: 600;
+  color: #1e3a8a; /* dark indigo tone to match button theme */
+  font-size: 0.95rem;
 }
 
 .form-field small {
@@ -157,7 +160,9 @@ select {
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.6);
   background: rgba(255, 255, 255, 0.9);
-}
+  color: #000000;
+} 
+
 
 .form-field--inline {
   display: grid;
@@ -236,7 +241,8 @@ th,
 td {
   text-align: left;
   padding: 0.65rem 0.75rem;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  border-bottom: 1px solid rgba(118, 90, 255, 0.35); /* soft purple border */
+  color: #000000;
 }
 
 th {
@@ -292,3 +298,4 @@ textarea {
     background: linear-gradient(180deg, rgba(15, 23, 42, 1) 0%, rgba(30, 41, 59, 1) 100%);
   }
 }
+

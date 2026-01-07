@@ -16,6 +16,7 @@ from app.models.responses import (
     KmerResultSummary,
 )
 from app.utils.result_store import ResultStore
+from typing import Optional
 
 router = APIRouter(prefix="/api")
 
@@ -88,17 +89,24 @@ async def process_fastq(
         )
 
 
+
+
 @router.post("/analyze-kmers", response_model=KmerResponse)
 async def analyze_kmers(
     data_file: UploadFile = File(...),
     k_min: int = Form(4),
-    k_max: int = Form(7),
+    k_max: Optional[int] = Form(None),
     wildcard_positions: str = Form(""),
     normalize: bool = Form(True),
     store: ResultStore = Depends(get_store),
 ) -> KmerResponse:
-    if k_min < 4 or k_max < k_min:
+    if k_min < 4:
+        raise HTTPException(status_code=400, detail="k_min must be >= 4.")
+    if k_max is not None and k_max < k_minf:
         raise HTTPException(status_code=400, detail="Invalid k-mer range.")
+
+    k_values = [k_min] if k_max is None else range(k_min, k_max + 1)
+
 
     wildcard_positions_list = [
         int(pos.strip())
@@ -117,7 +125,7 @@ async def analyze_kmers(
             data_path,
             pos_file,
             neg_file,
-            k_values=range(k_min, k_max + 1),
+            k_values=k_values,
             wildcard_positions=wildcard_positions_list,
             normalize=normalize,
             workdir=tmp_path / "outputs",

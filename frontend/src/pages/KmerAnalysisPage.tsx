@@ -14,6 +14,7 @@ export function KmerAnalysisPage() {
   const [wildcards, setWildcards] = useState("");
   const [normalize, setNormalize] = useState(true);
   const [result, setResult] = useState<KmerResponse | null>(null);
+  const [useRange, setUseRange] = useState(false);
 
   const { execute, loading, error } = useAsyncTask(async (formData: FormData) => {
     const response = await apiClient.post<KmerResponse>("/analyze-kmers", formData, {
@@ -31,7 +32,9 @@ export function KmerAnalysisPage() {
     const formData = new FormData();
     formData.append("data_file", dataFile);
     formData.append("k_min", String(kMin));
-    formData.append("k_max", String(kMax));
+    if (useRange) {
+      formData.append("k_max", String(kMax));
+    }
     formData.append("wildcard_positions", wildcards);
     formData.append("normalize", String(normalize));
 
@@ -74,17 +77,31 @@ export function KmerAnalysisPage() {
                 onChange={(event) => setKMin(Number(event.target.value))}
               />
             </label>
-            <label>
-              <span>k-max</span>
-              <input
-                type="number"
-                min={kMin}
-                max={10}
-                value={kMax}
-                onChange={(event) => setKMax(Number(event.target.value))}
-              />
-            </label>
           </div>
+
+          <label className="form-field form-checkbox">
+            <input
+              type="checkbox"
+              checked={useRange}
+              onChange={(event) => setUseRange(event.target.checked)}
+            />
+            <span>Run a range of k values</span>
+          </label>
+
+          {useRange && (
+            <div className="form-field form-field--inline">
+              <label>
+                <span>k-max</span>
+                <input
+                  type="number"
+                  min={kMin}
+                  max={10}
+                  value={kMax}
+                  onChange={(event) => setKMax(Number(event.target.value))}
+                />
+              </label>
+            </div>
+          )}
 
           <label className="form-field">
             <span>Wildcard positions</span>
