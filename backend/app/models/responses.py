@@ -37,9 +37,24 @@ class KmerResponse(BaseModel):
     runs: List[KmerResultSummary]
 
 
+class KmerTaskCreatedResponse(BaseModel):
+    task_id: str
+
+
+class KmerTaskStatusResponse(BaseModel):
+    task_id: str
+    status: str
+    progress: int
+    message: str
+    result: Optional[KmerResponse] = None
+    error: Optional[str] = None
+
+
 __all__ = [
     "FastqSampleSummary",
     "FastqResponse",
     "KmerResultSummary",
     "KmerResponse",
+    "KmerTaskCreatedResponse",
+    "KmerTaskStatusResponse",
 ]

@@ -7,6 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Dict, Iterable, List, Optional
 
 
@@ -14,6 +15,7 @@ from typing import Dict, Iterable, List, Optional
 class StoredResult:
     summary: dict
     archive_path: Path
+    download_name: str
     created_at: float
 
 
@@ -38,7 +40,16 @@ class ResultStore:
             if stored:
                 stored.archive_path.unlink(missing_ok=True)
 
-    def create_result(self, summary: dict, files: Iterable[Path]) -> str:
+    def _normalize_download_name(self, download_name: Optional[str]) -> str:
+        name = (download_name or "results").strip()
+        if name.lower().endswith(".zip"):
+            name = name[:-4]
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._-")
+        if not name:
+            name = "results"
+        return f"{name}.zip"
+
+    def create_result(self, summary: dict, files: Iterable[Path], download_name: Optional[str] = None) -> str:
         archive_dir = self.base_dir / uuid.uuid4().hex
         archive_dir.mkdir(parents=True, exist_ok=True)
         for file_path in files:
@@ -52,6 +63,7 @@ class ResultStore:
             self._results[result_id] = StoredResult(
                 summary=summary,
                 archive_path=Path(archive_path),
+                download_name=self._normalize_download_name(download_name),
                 created_at=time.time(),
             )
         return result_id
@@ -69,6 +81,13 @@ class ResultStore:
             if not stored:
                 return None
             return stored.archive_path
+
+    def get_download_name(self, result_id: str) -> Optional[str]:
+        with self._lock:
+            stored = self._results.get(result_id)
+            if not stored:
+                return None
+            return stored.download_name
 
 
 __all__ = ["ResultStore"]

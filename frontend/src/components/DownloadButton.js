@@ -3,6 +3,17 @@ import { useState } from "react";
 import { apiClient } from "../api/client";
 export function DownloadButton({ resultId, label = "Download results" }) {
     const [downloading, setDownloading] = useState(false);
+    const getDownloadName = (contentDisposition, fallbackName) => {
+        if (!contentDisposition) {
+            return fallbackName;
+        }
+        const utf8Match = contentDisposition.match(/filename\*=UTF-8''(?<name>[^;]+)/i);
+        if (utf8Match?.groups?.name) {
+            return decodeURIComponent(utf8Match.groups.name);
+        }
+        const plainMatch = contentDisposition.match(/filename="?(?<name>[^"]+)"?/i);
+        return plainMatch?.groups?.name ?? fallbackName;
+    };
     const handleDownload = async () => {
         setDownloading(true);
         try {
@@ -12,8 +23,10 @@ export function DownloadButton({ resultId, label = "Download results" }) {
             const blob = new Blob([response.data], { type: "application/zip" });
             const url = window.URL.createObjectURL(blob);
             const anchor = document.createElement("a");
+            const disposition = response.headers["content-disposition"];
+            const downloadName = getDownloadName(disposition, `antibody-results-${resultId}.zip`);
             anchor.href = url;
-            anchor.download = `antibody-results-${resultId}.zip`;
+            anchor.download = downloadName;
             anchor.click();
             window.URL.revokeObjectURL(url);
         }

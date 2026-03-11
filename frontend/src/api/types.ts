@@ -29,3 +29,16 @@ export type KmerResponse = {
   result_id: string;
   runs: KmerResultSummary[];
 };
+
+export type KmerTaskCreatedResponse = {
+  task_id: string;
+};
+
+export type KmerTaskStatusResponse = {
+  task_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  progress: number;
+  message: string;
+  result: KmerResponse | null;
+  error: string | null;
+};

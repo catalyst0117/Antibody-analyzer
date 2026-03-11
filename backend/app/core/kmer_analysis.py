@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.stats import mannwhitneyu, rankdata
 from statsmodels.stats.multitest import multipletests
+from tqdm import tqdm
 
 AA_BACKGROUND = {
     "X": 0.0,
@@ -47,6 +48,9 @@ class MannWhitneyResult:
     ad_file: Path
     nc_file: Path
     matrix_file: Path
+
+
+ProgressCallback = Callable[[int, str], None]
 
 
 def split_input_by_group(input_path: Path) -> Tuple[Path, Path]:
@@ -210,12 +214,14 @@ def run_mannwhitney(
     neg_cols: Sequence[str],
     output_prefix: Path,
     matrix_file: Path,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> MannWhitneyResult:
     kmers = matrix.index
     pvals: List[float] = []
     mean_rank_diffs: List[float] = []
+    total_kmers = len(kmers)
 
-    for kmer in kmers:
+    for index, kmer in enumerate(tqdm(kmers, desc="Running Mann-Whitney U tests"), start=1):
         pos_vals = matrix.loc[kmer, pos_cols].to_numpy()
         neg_vals = matrix.loc[kmer, neg_cols].to_numpy()
 
@@ -233,6 +239,9 @@ def run_mannwhitney(
         pvals.append(p_value)
         mean_rank_diffs.append(mean_rank_diff)
 
+        if progress_callback and (index == total_kmers or index % max(1, total_kmers // 20) == 0):
+            progress_callback(index, total_kmers)
+
     fdr = multipletests(pvals, method="fdr_tsbky")[1]
 
     result_df = pd.DataFrame(
@@ -240,7 +249,7 @@ def run_mannwhitney(
             "kmer": kmers,
             "p_value": pvals,
             "mean_rank_diff": mean_rank_diffs,
-            "fdr_corrected_p": fdr,
+            "Q value": fdr,
         }
     ).sort_values("p_value")
 
@@ -264,6 +273,74 @@ def run_mannwhitney(
     )
 
 
+def analyze_single_k(
+    input_path: Path,
+    pos_file: Path,
+    neg_file: Path,
+    k: int,
+    wildcard_positions: Sequence[int] | None = None,
+    normalize: bool = True,
+    workdir: Optional[Path] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> MannWhitneyResult:
+    workdir = Path(workdir or input_path.parent)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    wildcard_positions = list(wildcard_positions or [])
+
+    if progress_callback:
+        progress_callback(10, "Tiling AD cohort")
+    pos_dicts, filtered_pos = tile_patient_file(
+        pos_file,
+        kmer_length=k,
+        wildcard_positions=wildcard_positions,
+    )
+
+    if progress_callback:
+        progress_callback(30, "Tiling NC cohort")
+    neg_dicts, filtered_neg = tile_patient_file(
+        neg_file,
+        kmer_length=k,
+        wildcard_positions=wildcard_positions,
+    )
+
+    filter_set = filtered_pos & filtered_neg if filtered_pos and filtered_neg else filtered_pos or filtered_neg
+
+    if progress_callback:
+        progress_callback(50, "Building k-mer matrix")
+    matrix = build_kmer_matrix({**pos_dicts, **neg_dicts}, kmers_filter=filter_set, normalize=normalize)
+
+    wildcard_label = "".join(str(i) for i in wildcard_positions) or "no_wildcards"
+    matrix_file = workdir / f"{input_path.stem}_matrix_{k}mers_{wildcard_label}.csv"
+    matrix.to_csv(matrix_file, index=False)
+
+    pos_cols = list(pos_dicts.keys())
+    neg_cols = list(neg_dicts.keys())
+
+    output_prefix = workdir / f"{input_path.stem}_U_test_{k}mers_{wildcard_label}"
+    if progress_callback:
+        progress_callback(60, "Running Mann-Whitney tests")
+    result = run_mannwhitney(
+        matrix,
+        pos_cols,
+        neg_cols,
+        output_prefix=output_prefix,
+        matrix_file=matrix_file,
+        progress_callback=(
+            lambda current, total: progress_callback(
+                60 + int((current / total) * 30),
+                f"Running Mann-Whitney tests ({current}/{total})",
+            )
+            if progress_callback and total
+            else None
+        ),
+    )
+
+    if progress_callback:
+        progress_callback(95, "Writing output files")
+    return result
+
+
 def analyze_groups(
     input_path: Path,
     pos_file: Path,
@@ -274,36 +351,23 @@ def analyze_groups(
     workdir: Optional[Path] = None,
 ) -> List[MannWhitneyResult]:
     workdir = Path(workdir or input_path.parent)
-    workdir.mkdir(parents=True, exist_ok=True)  # <- critical fix
+    workdir.mkdir(parents=True, exist_ok=True)
 
     wildcard_positions = list(wildcard_positions or [])
     results: List[MannWhitneyResult] = []
 
-    for k in k_values:
-        pos_dicts, filtered_pos = tile_patient_file(
-            pos_file,
-            kmer_length=k,
-            wildcard_positions=wildcard_positions,
+    for k in tqdm(list(k_values), desc="Processing k values"):
+        results.append(
+            analyze_single_k(
+                input_path,
+                pos_file,
+                neg_file,
+                k=k,
+                wildcard_positions=wildcard_positions,
+                normalize=normalize,
+                workdir=workdir,
+            )
         )
-        neg_dicts, filtered_neg = tile_patient_file(
-            neg_file,
-            kmer_length=k,
-            wildcard_positions=wildcard_positions,
-        )
-
-        filter_set = filtered_pos & filtered_neg if filtered_pos and filtered_neg else filtered_pos or filtered_neg
-        matrix = build_kmer_matrix({**pos_dicts, **neg_dicts}, kmers_filter=filter_set, normalize=normalize)
-
-        wildcard_label = ''.join(str(i) for i in wildcard_positions) or 'no_wildcards'
-        matrix_file = workdir / f"{input_path.stem}_matrix_{k}mers_{wildcard_label}.csv"
-        matrix.to_csv(matrix_file, index=False)
-
-        pos_cols = list(pos_dicts.keys())
-        neg_cols = list(neg_dicts.keys())
-
-        output_prefix = workdir / f"{input_path.stem}_U_test_{k}mers_{wildcard_label}"
-        result = run_mannwhitney(matrix, pos_cols, neg_cols, output_prefix=output_prefix, matrix_file=matrix_file)
-        results.append(result)
 
     return results
 
@@ -312,6 +376,7 @@ __all__ = [
     "CHI_SQUARE_THRESHOLD",
     "MannWhitneyResult",
     "analyze_groups",
+    "analyze_single_k",
     "build_kmer_matrix",
     "run_mannwhitney",
     "split_input_by_group",

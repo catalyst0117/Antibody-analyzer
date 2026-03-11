@@ -1,27 +1,73 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { apiClient } from "../api/client";
-import { KmerResponse, KmerResultSummary } from "../api/types";
+import {
+  KmerResponse,
+  KmerResultSummary,
+  KmerTaskCreatedResponse,
+  KmerTaskStatusResponse,
+} from "../api/types";
 import { DownloadButton } from "../components/DownloadButton";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBanner } from "../components/StatusBanner";
-import { useAsyncTask } from "../hooks/useAsyncTask";
 
 export function KmerAnalysisPage() {
   const [dataFile, setDataFile] = useState<File | null>(null);
-  const [kMin, setKMin] = useState(4);
-  const [kMax, setKMax] = useState(7);
+  const [kValue, setKValue] = useState("4");
+  const [archiveName, setArchiveName] = useState("");
   const [wildcards, setWildcards] = useState("");
   const [normalize, setNormalize] = useState(true);
   const [result, setResult] = useState<KmerResponse | null>(null);
-  const [useRange, setUseRange] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<KmerTaskStatusResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const { execute, loading, error } = useAsyncTask(async (formData: FormData) => {
-    const response = await apiClient.post<KmerResponse>("/analyze-kmers", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
-    return response.data;
-  });
+  useEffect(() => {
+    if (!taskId) {
+      return;
+    }
+
+    let cancelled = false;
+    const pollStatus = async () => {
+      try {
+        const response = await apiClient.get<KmerTaskStatusResponse>(`/analyze-kmers/${taskId}`);
+        if (cancelled) {
+          return;
+        }
+
+        const nextStatus = response.data;
+        setTaskStatus(nextStatus);
+
+        if (nextStatus.status === "succeeded") {
+          setLoading(false);
+          setResult(nextStatus.result);
+          return;
+        }
+
+        if (nextStatus.status === "failed") {
+          setLoading(false);
+          setError(nextStatus.error ?? nextStatus.message);
+          return;
+        }
+
+        window.setTimeout(pollStatus, 700);
+      } catch (pollError) {
+        if (cancelled) {
+          return;
+        }
+        const message = pollError instanceof Error ? pollError.message : "Unable to fetch progress";
+        setLoading(false);
+        setError(message);
+      }
+    };
+
+    void pollStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -29,18 +75,41 @@ export function KmerAnalysisPage() {
       alert("Upload the merged AD/NC spreadsheet first.");
       return;
     }
+    const parsedK = Number.parseInt(kValue, 10);
+    if (!Number.isInteger(parsedK) || parsedK < 4 || parsedK > 10) {
+      setError("k-mer size must be an integer between 4 and 10.");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("data_file", dataFile);
-    formData.append("k_min", String(kMin));
-    if (useRange) {
-      formData.append("k_max", String(kMax));
-    }
+    formData.append("k", String(parsedK));
+    formData.append("archive_name", archiveName);
     formData.append("wildcard_positions", wildcards);
     formData.append("normalize", String(normalize));
 
-    const response = await execute(formData);
-    if (response) {
-      setResult(response);
+    setError(null);
+    setTaskId(null);
+    setResult(null);
+    setTaskStatus({
+      task_id: "pending",
+      status: "queued",
+      progress: 0,
+      message: "Uploading analysis input",
+      result: null,
+      error: null,
+    });
+    setLoading(true);
+
+    try {
+      const response = await apiClient.post<KmerTaskCreatedResponse>("/analyze-kmers", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setTaskId(response.data.task_id);
+    } catch (submitError) {
+      const message = submitError instanceof Error ? submitError.message : "Unable to start analysis";
+      setLoading(false);
+      setError(message);
     }
   };
 
@@ -50,7 +119,7 @@ export function KmerAnalysisPage() {
     <div className="page-grid">
       <SectionCard
         title="K-mer enrichment analysis"
-        description="Split AD vs. NC cohorts, tile peptides, and run Mann–Whitney U tests across k-mer windows."
+        description="Split AD vs. NC cohorts, tile peptides, and run Mann–Whitney U tests for one k-mer size at a time."
       >
         <form className="form-grid" onSubmit={handleSubmit}>
           <label className="form-field">
@@ -68,40 +137,29 @@ export function KmerAnalysisPage() {
 
           <div className="form-field form-field--inline">
             <label>
-              <span>k-min</span>
+              <span>k-mer size</span>
               <input
-                type="number"
-                min={4}
-                max={10}
-                value={kMin}
-                onChange={(event) => setKMin(Number(event.target.value))}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={kValue}
+                onChange={(event) => setKValue(event.target.value)}
+                placeholder="4"
               />
+              <small>Enter one integer between 4 and 10.</small>
             </label>
           </div>
 
-          <label className="form-field form-checkbox">
+          <label className="form-field">
+            <span>Download bundle name</span>
             <input
-              type="checkbox"
-              checked={useRange}
-              onChange={(event) => setUseRange(event.target.checked)}
+              type="text"
+              value={archiveName}
+              onChange={(event) => setArchiveName(event.target.value)}
+              placeholder="e.g. patient_cohort_k4_results"
             />
-            <span>Run a range of k values</span>
+            <small>Optional. Used as the ZIP filename when users download the result bundle.</small>
           </label>
-
-          {useRange && (
-            <div className="form-field form-field--inline">
-              <label>
-                <span>k-max</span>
-                <input
-                  type="number"
-                  min={kMin}
-                  max={10}
-                  value={kMax}
-                  onChange={(event) => setKMax(Number(event.target.value))}
-                />
-              </label>
-            </div>
-          )}
 
           <label className="form-field">
             <span>Wildcard positions</span>
@@ -125,18 +183,30 @@ export function KmerAnalysisPage() {
 
           <div className="form-actions">
             <button type="submit" className="primary-button" disabled={loading}>
-              {loading ? "Running tests..." : "Start analysis"}
+              {loading ? "Running analysis..." : "Start analysis"}
             </button>
             {result && <DownloadButton resultId={result.result_id} label="Download CSV bundle" />}
           </div>
         </form>
+
+        {taskStatus && loading && (
+          <div className="progress-panel" aria-live="polite">
+            <div className="progress-panel__header">
+              <strong>{taskStatus.message}</strong>
+              <span>{taskStatus.progress}%</span>
+            </div>
+            <div className="progress-bar" role="progressbar" aria-valuenow={taskStatus.progress} aria-valuemin={0} aria-valuemax={100}>
+              <div className="progress-bar__fill" style={{ width: `${taskStatus.progress}%` }} />
+            </div>
+          </div>
+        )}
 
         {error && <StatusBanner tone="error" title="K-mer analysis failed" message={error} />}
         {result && !error && (
           <StatusBanner
             tone="success"
             title="K-mer analysis ready"
-            message="Download CSV exports for each window size."
+            message="Download CSV exports for the completed k-mer run."
           />
         )}
       </SectionCard>
@@ -144,7 +214,7 @@ export function KmerAnalysisPage() {
       {runs.length > 0 && result && (
         <SectionCard
           title="Mann–Whitney summaries"
-          description="Highlights the number of kmers enriched in each cohort for every k value."
+          description="Highlights the number of kmers enriched in each cohort for the selected k value."
           actions={<DownloadButton resultId={result.result_id} label="Download combined outputs" />}
         >
           <div className="table-wrapper">

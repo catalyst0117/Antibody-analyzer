@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
 from typing import List
 
@@ -8,13 +9,16 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.core.fastq_processing import FastqProcessor
-from app.core.kmer_analysis import analyze_groups, split_input_by_group
+from app.core.kmer_analysis import analyze_single_k, split_input_by_group
 from app.models.responses import (
     FastqResponse,
     FastqSampleSummary,
     KmerResponse,
     KmerResultSummary,
+    KmerTaskCreatedResponse,
+    KmerTaskStatusResponse,
 )
+from app.utils.kmer_task_store import KmerTaskStore
 from app.utils.result_store import ResultStore
 from typing import Optional
 
@@ -26,6 +30,76 @@ def get_store() -> ResultStore:
     if not hasattr(get_store, "_store"):
         get_store._store = ResultStore()
     return get_store._store  # type: ignore[attr-defined]
+
+
+def get_kmer_task_store() -> KmerTaskStore:
+    if not hasattr(get_kmer_task_store, "_store"):
+        get_kmer_task_store._store = KmerTaskStore()
+    return get_kmer_task_store._store  # type: ignore[attr-defined]
+
+
+def _run_kmer_task(
+    *,
+    task_id: str,
+    data_bytes: bytes,
+    data_filename: str,
+    k: int,
+    wildcard_positions_list: List[int],
+    normalize: bool,
+    archive_name: str,
+    store: ResultStore,
+    task_store: KmerTaskStore,
+) -> None:
+    try:
+        task_store.update_task(task_id, status="running", progress=5, message="Preparing analysis")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            data_path = tmp_path / data_filename
+            data_path.write_bytes(data_bytes)
+
+            task_store.update_task(task_id, progress=8, message="Splitting AD and NC cohorts")
+            pos_file, neg_file = split_input_by_group(data_path)
+            result = analyze_single_k(
+                data_path,
+                pos_file,
+                neg_file,
+                k=k,
+                wildcard_positions=wildcard_positions_list,
+                normalize=normalize,
+                workdir=tmp_path / "outputs",
+                progress_callback=lambda progress, message: task_store.update_task(
+                    task_id,
+                    status="running",
+                    progress=progress,
+                    message=message,
+                ),
+            )
+
+            response_run = KmerResultSummary(
+                k=result.k,
+                total_kmers=result.total_kmers,
+                ad_elevated=result.ad_elevated,
+                nc_elevated=result.nc_elevated,
+                result_filename=result.result_file.name,
+                ad_filename=result.ad_file.name,
+                nc_filename=result.nc_file.name,
+                matrix_filename=result.matrix_file.name,
+            )
+
+            files_to_archive = [pos_file, neg_file, result.result_file, result.ad_file, result.nc_file, result.matrix_file]
+            task_store.update_task(task_id, progress=98, message="Bundling result files")
+            result_id = store.create_result(
+                summary={
+                    "type": "kmer",
+                    "runs": [response_run.model_dump()],
+                },
+                files=files_to_archive,
+                download_name=archive_name or f"{Path(data_filename).stem}_k{k}_results",
+            )
+
+            task_store.complete_task(task_id, KmerResponse(result_id=result_id, runs=[response_run]))
+    except Exception as exc:
+        task_store.fail_task(task_id, str(exc))
 
 
 @router.post("/process-fastq", response_model=FastqResponse)
@@ -78,6 +152,7 @@ async def process_fastq(
                 "samples": [summary.dict() for summary in summary_payload],
             },
             files=files_to_archive,
+            download_name=f"{Path(output_name).stem}_results",
         )
 
         return FastqResponse(
@@ -91,73 +166,63 @@ async def process_fastq(
 
 
 
-@router.post("/analyze-kmers", response_model=KmerResponse)
+@router.post("/analyze-kmers", response_model=KmerTaskCreatedResponse)
 async def analyze_kmers(
     data_file: UploadFile = File(...),
-    k_min: int = Form(4),
-    k_max: Optional[int] = Form(None),
+    k: int = Form(4),
     wildcard_positions: str = Form(""),
     normalize: bool = Form(True),
+    archive_name: str = Form(""),
     store: ResultStore = Depends(get_store),
-) -> KmerResponse:
-    if k_min < 4:
-        raise HTTPException(status_code=400, detail="k_min must be >= 4.")
-    if k_max is not None and k_max < k_minf:
-        raise HTTPException(status_code=400, detail="Invalid k-mer range.")
-
-    k_values = [k_min] if k_max is None else range(k_min, k_max + 1)
-
-
+    task_store: KmerTaskStore = Depends(get_kmer_task_store),
+) -> KmerTaskCreatedResponse:
+    if k < 4:
+        raise HTTPException(status_code=400, detail="k must be >= 4.")
     wildcard_positions_list = [
         int(pos.strip())
         for pos in wildcard_positions.split(",")
         if pos.strip()
     ]
+    data_bytes = await data_file.read()
+    data_filename = data_file.filename or "patient_data.xlsx"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        data_filename = data_file.filename or "patient_data.xlsx"
-        data_path = tmp_path / data_filename
-        data_path.write_bytes(await data_file.read())
+    task_id = task_store.create_task()
+    worker = threading.Thread(
+        target=_run_kmer_task,
+        kwargs={
+            "task_id": task_id,
+            "data_bytes": data_bytes,
+            "data_filename": data_filename,
+            "k": k,
+            "wildcard_positions_list": wildcard_positions_list,
+            "normalize": normalize,
+            "archive_name": archive_name,
+            "store": store,
+            "task_store": task_store,
+        },
+        daemon=True,
+    )
+    worker.start()
 
-        pos_file, neg_file = split_input_by_group(data_path)
-        results = analyze_groups(
-            data_path,
-            pos_file,
-            neg_file,
-            k_values=k_values,
-            wildcard_positions=wildcard_positions_list,
-            normalize=normalize,
-            workdir=tmp_path / "outputs",
-        )
+    return KmerTaskCreatedResponse(task_id=task_id)
 
-        response_runs = [
-            KmerResultSummary(
-                k=item.k,
-                total_kmers=item.total_kmers,
-                ad_elevated=item.ad_elevated,
-                nc_elevated=item.nc_elevated,
-                result_filename=item.result_file.name,
-                ad_filename=item.ad_file.name,
-                nc_filename=item.nc_file.name,
-                matrix_filename=item.matrix_file.name,
-            )
-            for item in results
-        ]
 
-        files_to_archive = [pos_file, neg_file]
-        for item in results:
-            files_to_archive.extend([item.result_file, item.ad_file, item.nc_file, item.matrix_file])
-
-        result_id = store.create_result(
-            summary={
-                "type": "kmer",
-                "runs": [run.dict() for run in response_runs],
-            },
-            files=files_to_archive,
-        )
-
-        return KmerResponse(result_id=result_id, runs=response_runs)
+@router.get("/analyze-kmers/{task_id}", response_model=KmerTaskStatusResponse)
+async def get_kmer_task_status(
+    task_id: str,
+    task_store: KmerTaskStore = Depends(get_kmer_task_store),
+) -> KmerTaskStatusResponse:
+    task = task_store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return KmerTaskStatusResponse(
+        task_id=task.task_id,
+        status=task.status,
+        progress=task.progress,
+        message=task.message,
+        result=task.result,
+        error=task.error,
+    )
 
 
 @router.get("/results/{result_id}")
@@ -171,10 +236,11 @@ async def get_result_summary(result_id: str, store: ResultStore = Depends(get_st
 @router.get("/results/{result_id}/download")
 async def download_result(result_id: str, store: ResultStore = Depends(get_store)):
     archive_path = store.get_archive_path(result_id)
+    download_name = store.get_download_name(result_id)
     if not archive_path or not archive_path.exists():
         raise HTTPException(status_code=404, detail="Result not found")
     return FileResponse(
         path=archive_path,
-        filename=archive_path.name,
+        filename=download_name or archive_path.name,
         media_type="application/zip",
     )
