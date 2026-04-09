@@ -49,12 +49,26 @@ class ResultStore:
             name = "results"
         return f"{name}.zip"
 
-    def create_result(self, summary: dict, files: Iterable[Path], download_name: Optional[str] = None) -> str:
+    def create_result(
+        self,
+        summary: dict,
+        files: Iterable[Path],
+        download_name: Optional[str] = None,
+        archive_root_name: Optional[str] = None,
+    ) -> str:
         archive_dir = self.base_dir / uuid.uuid4().hex
         archive_dir.mkdir(parents=True, exist_ok=True)
+        bundle_root_name = self._normalize_download_name(archive_root_name or download_name).removesuffix(".zip")
+        bundle_root_dir = archive_dir / bundle_root_name
+        bundle_root_dir.mkdir(parents=True, exist_ok=True)
         for file_path in files:
-            shutil.copy(file_path, archive_dir / file_path.name)
-        archive_path = shutil.make_archive(str(archive_dir), "zip", archive_dir)
+            shutil.copy(file_path, bundle_root_dir / file_path.name)
+        archive_path = shutil.make_archive(
+            str(archive_dir),
+            "zip",
+            root_dir=archive_dir,
+            base_dir=bundle_root_dir.name,
+        )
         shutil.rmtree(archive_dir, ignore_errors=True)
 
         with self._lock:

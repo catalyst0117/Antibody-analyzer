@@ -42,3 +42,17 @@ export type KmerTaskStatusResponse = {
   result: KmerResponse | null;
   error: string | null;
 };
+
+export type Module3Response = {
+  result_id: string;
+  output_folder_name: string;
+  positive_mapping_filename: string;
+  negative_mapping_filename: string;
+  positive_clean_filename: string;
+  negative_clean_filename: string;
+  positive_manhattan_filename: string;
+  negative_manhattan_filename: string;
+  top_n: number | null;
+  wildcards: boolean;
+  q_cutoff: number;
+};

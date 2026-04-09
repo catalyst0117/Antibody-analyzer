@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { apiClient } from "../api/client";
 import {
@@ -11,17 +12,68 @@ import { DownloadButton } from "../components/DownloadButton";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBanner } from "../components/StatusBanner";
 
+const KMER_SESSION_KEY = "kmer-analysis-page-state";
+
+type KmerSessionState = {
+  dataFileName: string | null;
+  kValue: string;
+  archiveName: string;
+  wildcards: string;
+  normalize: boolean;
+  result: KmerResponse | null;
+  taskId: string | null;
+  taskStatus: KmerTaskStatusResponse | null;
+  loading: boolean;
+  error: string | null;
+};
+
+function loadKmerSessionState(): KmerSessionState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = window.sessionStorage.getItem(KMER_SESSION_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as KmerSessionState;
+  } catch {
+    return null;
+  }
+}
+
 export function KmerAnalysisPage() {
+  const savedState = loadKmerSessionState();
   const [dataFile, setDataFile] = useState<File | null>(null);
-  const [kValue, setKValue] = useState("4");
-  const [archiveName, setArchiveName] = useState("");
-  const [wildcards, setWildcards] = useState("");
-  const [normalize, setNormalize] = useState(true);
-  const [result, setResult] = useState<KmerResponse | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [taskStatus, setTaskStatus] = useState<KmerTaskStatusResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [dataFileName, setDataFileName] = useState<string | null>(savedState?.dataFileName ?? null);
+  const [kValue, setKValue] = useState(savedState?.kValue ?? "4");
+  const [archiveName, setArchiveName] = useState(savedState?.archiveName ?? "");
+  const [wildcards, setWildcards] = useState(savedState?.wildcards ?? "");
+  const [normalize, setNormalize] = useState(savedState?.normalize ?? true);
+  const [result, setResult] = useState<KmerResponse | null>(savedState?.result ?? null);
+  const [taskId, setTaskId] = useState<string | null>(savedState?.taskId ?? null);
+  const [taskStatus, setTaskStatus] = useState<KmerTaskStatusResponse | null>(savedState?.taskStatus ?? null);
+  const [loading, setLoading] = useState(savedState?.loading ?? false);
+  const [error, setError] = useState<string | null>(savedState?.error ?? null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const nextState: KmerSessionState = {
+      kValue,
+      dataFileName,
+      archiveName,
+      wildcards,
+      normalize,
+      result,
+      taskId,
+      taskStatus,
+      loading,
+      error,
+    };
+    window.sessionStorage.setItem(KMER_SESSION_KEY, JSON.stringify(nextState));
+  }, [archiveName, dataFileName, error, kValue, loading, normalize, result, taskId, taskStatus, wildcards]);
 
   useEffect(() => {
     if (!taskId) {
@@ -125,14 +177,18 @@ export function KmerAnalysisPage() {
           <label className="form-field">
             <span>Merged cohort file</span>
             <input
+              className="file-input"
               type="file"
               accept=".xlsx,.csv"
               onChange={(event) => {
                 const files = event.target.files;
-                setDataFile(files && files.length > 0 ? files[0] : null);
+                const selectedFile = files && files.length > 0 ? files[0] : null;
+                setDataFile(selectedFile);
+                setDataFileName(selectedFile?.name ?? null);
               }}
             />
             <small>Original file should contain alternating AD_/NC_ columns with sequence/count pairs.</small>
+            {dataFileName && <small>Selected file: {dataFileName}</small>}
           </label>
 
           <div className="form-field form-field--inline">
@@ -215,7 +271,14 @@ export function KmerAnalysisPage() {
         <SectionCard
           title="Mann–Whitney summaries"
           description="Highlights the number of kmers enriched in each cohort for the selected k value."
-          actions={<DownloadButton resultId={result.result_id} label="Download combined outputs" />}
+          actions={
+            <div className="section-card__actions-group">
+              <Link to="/module3" className="secondary-button">
+                Open Proteome Mapping
+              </Link>
+              <DownloadButton resultId={result.result_id} label="Download combined outputs" />
+            </div>
+          }
         >
           <div className="table-wrapper">
             <table>

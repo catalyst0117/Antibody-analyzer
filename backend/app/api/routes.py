@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 
 from app.core.fastq_processing import FastqProcessor
 from app.core.kmer_analysis import analyze_single_k, split_input_by_group
+from app.core.module3_mapping import resolve_output_folder_name, run_module3_mapping
 from app.models.responses import (
     FastqResponse,
     FastqSampleSummary,
@@ -17,6 +18,7 @@ from app.models.responses import (
     KmerResultSummary,
     KmerTaskCreatedResponse,
     KmerTaskStatusResponse,
+    Module3Response,
 )
 from app.utils.kmer_task_store import KmerTaskStore
 from app.utils.result_store import ResultStore
@@ -223,6 +225,96 @@ async def get_kmer_task_status(
         result=task.result,
         error=task.error,
     )
+
+
+@router.post("/module3-map", response_model=Module3Response)
+async def module3_map(
+    positive_file: UploadFile = File(...),
+    negative_file: UploadFile = File(...),
+    proteome_fasta: UploadFile = File(...),
+    top_n: Optional[int] = Form(None),
+    wildcards: bool = Form(False),
+    q_cutoff: float = Form(0.01),
+    output_folder_name: str = Form(""),
+    store: ResultStore = Depends(get_store),
+) -> Module3Response:
+    if top_n is not None and top_n <= 0:
+        raise HTTPException(status_code=400, detail="top_n must be greater than 0.")
+    if q_cutoff < 0 or q_cutoff > 1:
+        raise HTTPException(status_code=400, detail="q_cutoff must be between 0 and 1.")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            positive_path = tmp_path / (positive_file.filename or "positive_significance.csv")
+            negative_path = tmp_path / (negative_file.filename or "negative_significance.csv")
+            fasta_path = tmp_path / (proteome_fasta.filename or "proteome.fasta")
+            resolved_output_folder_name = resolve_output_folder_name(
+                requested_name=output_folder_name,
+                source_filename=positive_path.name,
+                top_n=top_n,
+            )
+
+            positive_path.write_bytes(await positive_file.read())
+            negative_path.write_bytes(await negative_file.read())
+            fasta_path.write_bytes(await proteome_fasta.read())
+
+            result = run_module3_mapping(
+                positive_file=positive_path,
+                negative_file=negative_path,
+                fasta_file=fasta_path,
+                output_dir=tmp_path / resolved_output_folder_name,
+                output_folder_name=resolved_output_folder_name,
+                top_n=top_n,
+                wildcards=wildcards,
+                q_cutoff=q_cutoff,
+            )
+
+            files_to_archive = [
+                result.positive_mapping_file,
+                result.negative_mapping_file,
+                result.positive_clean_file,
+                result.negative_clean_file,
+                result.positive_manhattan_file,
+                result.negative_manhattan_file,
+                result.run_summary_file,
+            ]
+            result_id = store.create_result(
+                summary={
+                    "type": "proteome_mapping",
+                    "output_folder_name": result.output_folder_name,
+                    "positive_mapping_filename": result.positive_mapping_file.name,
+                    "negative_mapping_filename": result.negative_mapping_file.name,
+                    "positive_clean_filename": result.positive_clean_file.name,
+                    "negative_clean_filename": result.negative_clean_file.name,
+                    "positive_manhattan_filename": result.positive_manhattan_file.name,
+                    "negative_manhattan_filename": result.negative_manhattan_file.name,
+                    "run_summary_filename": result.run_summary_file.name,
+                    "top_n": top_n,
+                    "wildcards": wildcards,
+                    "q_cutoff": q_cutoff,
+                },
+                files=files_to_archive,
+                download_name=result.output_folder_name,
+                archive_root_name=result.output_folder_name,
+            )
+
+            return Module3Response(
+                result_id=result_id,
+                output_folder_name=result.output_folder_name,
+                positive_mapping_filename=result.positive_mapping_file.name,
+                negative_mapping_filename=result.negative_mapping_file.name,
+                positive_clean_filename=result.positive_clean_file.name,
+                negative_clean_filename=result.negative_clean_file.name,
+                positive_manhattan_filename=result.positive_manhattan_file.name,
+                negative_manhattan_filename=result.negative_manhattan_file.name,
+                top_n=top_n,
+                wildcards=wildcards,
+                q_cutoff=q_cutoff,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/results/{result_id}")

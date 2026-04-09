@@ -50,6 +50,20 @@ class KmerTaskStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class Module3Response(BaseModel):
+    result_id: str
+    output_folder_name: str
+    positive_mapping_filename: str
+    negative_mapping_filename: str
+    positive_clean_filename: str
+    negative_clean_filename: str
+    positive_manhattan_filename: str
+    negative_manhattan_filename: str
+    top_n: Optional[int]
+    wildcards: bool
+    q_cutoff: float
+
+
 __all__ = [
     "FastqSampleSummary",
     "FastqResponse",
@@ -57,4 +71,5 @@ __all__ = [
     "KmerResponse",
     "KmerTaskCreatedResponse",
     "KmerTaskStatusResponse",
+    "Module3Response",
 ]

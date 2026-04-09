@@ -51,6 +51,7 @@ export function FastqProcessingPage() {
           <label className="form-field">
             <span>FASTQ files</span>
             <input
+              className="file-input"
               type="file"
               accept=".fastq,.fq,.fastq.gz,.fq.gz"
               multiple
@@ -65,6 +66,7 @@ export function FastqProcessingPage() {
           <label className="form-field">
             <span>Background FASTQ (optional)</span>
             <input
+              className="file-input"
               type="file"
               accept=".fastq,.fq,.fastq.gz,.fq.gz"
               onChange={(event) => {

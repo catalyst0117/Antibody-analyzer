@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { FastqProcessingPage } from "./pages/FastqProcessingPage";
 import { KmerAnalysisPage } from "./pages/KmerAnalysisPage";
+import { Module3MappingPage } from "./pages/Module3MappingPage";
 import { HeaderNav } from "./components/HeaderNav";
 
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
         <Routes>
           <Route path="/fastq" element={<FastqProcessingPage />} />
           <Route path="/kmer" element={<KmerAnalysisPage />} />
+          <Route path="/module3" element={<Module3MappingPage />} />
           <Route path="*" element={<Navigate to="/fastq" replace />} />
         </Routes>
       </main>

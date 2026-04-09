@@ -6,7 +6,8 @@ type HeaderNavProps = {
 
 const NAV_ITEMS = [
   { label: "FASTQ Processor", path: "/fastq" },
-  { label: "K-mer Analysis", path: "/kmer" }
+  { label: "K-mer Analysis", path: "/kmer" },
+  { label: "Proteome Mapping", path: "/module3" },
 ];
 
 export function HeaderNav({ currentPath }: HeaderNavProps) {
