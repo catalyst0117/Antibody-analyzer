@@ -3,6 +3,18 @@ setlocal
 
 set ROOT=%~dp0
 
+echo Checking backend virtual environment...
+if not exist "%ROOT%backend\.venv\Scripts\activate.bat" (
+    echo Virtual environment not found. Creating .venv...
+    cd /d "%ROOT%backend"
+    python -m venv .venv
+)
+
+echo Installing backend requirements...
+call "%ROOT%backend\.venv\Scripts\activate.bat"
+python -m pip install --upgrade pip
+pip install -r "%ROOT%backend\requirements.txt"
+
 echo Starting backend...
 start "Antibody Backend" cmd /k "cd /d %ROOT%backend && call .venv\Scripts\activate.bat && uvicorn app.main:app --reload"
 
