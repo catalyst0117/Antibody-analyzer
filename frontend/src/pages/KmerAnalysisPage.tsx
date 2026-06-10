@@ -14,8 +14,15 @@ import { StatusBanner } from "../components/StatusBanner";
 
 const KMER_SESSION_KEY = "kmer-analysis-page-state";
 
+type KmerInputMode = "merged" | "separate";
+
 type KmerSessionState = {
+  inputMode: KmerInputMode;
   dataFileName: string | null;
+  positiveFileName: string | null;
+  negativeFileName: string | null;
+  positiveKeyword: string;
+  negativeKeyword: string;
   kValue: string;
   archiveName: string;
   wildcards: string;
@@ -44,8 +51,15 @@ function loadKmerSessionState(): KmerSessionState | null {
 
 export function KmerAnalysisPage() {
   const savedState = loadKmerSessionState();
+  const [inputMode, setInputMode] = useState<KmerInputMode>(savedState?.inputMode ?? "merged");
   const [dataFile, setDataFile] = useState<File | null>(null);
+  const [positiveFile, setPositiveFile] = useState<File | null>(null);
+  const [negativeFile, setNegativeFile] = useState<File | null>(null);
   const [dataFileName, setDataFileName] = useState<string | null>(savedState?.dataFileName ?? null);
+  const [positiveFileName, setPositiveFileName] = useState<string | null>(savedState?.positiveFileName ?? null);
+  const [negativeFileName, setNegativeFileName] = useState<string | null>(savedState?.negativeFileName ?? null);
+  const [positiveKeyword, setPositiveKeyword] = useState(savedState?.positiveKeyword ?? "AD");
+  const [negativeKeyword, setNegativeKeyword] = useState(savedState?.negativeKeyword ?? "NC");
   const [kValue, setKValue] = useState(savedState?.kValue ?? "4");
   const [archiveName, setArchiveName] = useState(savedState?.archiveName ?? "");
   const [wildcards, setWildcards] = useState(savedState?.wildcards ?? "");
@@ -61,8 +75,13 @@ export function KmerAnalysisPage() {
       return;
     }
     const nextState: KmerSessionState = {
+      inputMode,
       kValue,
       dataFileName,
+      positiveFileName,
+      negativeFileName,
+      positiveKeyword,
+      negativeKeyword,
       archiveName,
       wildcards,
       normalize,
@@ -73,7 +92,23 @@ export function KmerAnalysisPage() {
       error,
     };
     window.sessionStorage.setItem(KMER_SESSION_KEY, JSON.stringify(nextState));
-  }, [archiveName, dataFileName, error, kValue, loading, normalize, result, taskId, taskStatus, wildcards]);
+  }, [
+    archiveName,
+    dataFileName,
+    error,
+    inputMode,
+    kValue,
+    loading,
+    negativeFileName,
+    negativeKeyword,
+    normalize,
+    positiveFileName,
+    positiveKeyword,
+    result,
+    taskId,
+    taskStatus,
+    wildcards,
+  ]);
 
   useEffect(() => {
     if (!taskId) {
@@ -123,8 +158,16 @@ export function KmerAnalysisPage() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!dataFile) {
-      alert("Upload the merged AD/NC spreadsheet first.");
+    if (inputMode === "merged" && !dataFile) {
+      alert("Upload the merged cohort spreadsheet first.");
+      return;
+    }
+    if (inputMode === "merged" && (!positiveKeyword.trim() || !negativeKeyword.trim())) {
+      alert("Enter both positive and negative column keywords.");
+      return;
+    }
+    if (inputMode === "separate" && (!positiveFile || !negativeFile)) {
+      alert("Upload both positive and negative cohort files.");
       return;
     }
     const parsedK = Number.parseInt(kValue, 10);
@@ -134,7 +177,16 @@ export function KmerAnalysisPage() {
     }
 
     const formData = new FormData();
-    formData.append("data_file", dataFile);
+    formData.append("input_mode", inputMode);
+    if (inputMode === "merged" && dataFile) {
+      formData.append("data_file", dataFile);
+      formData.append("positive_keyword", positiveKeyword.trim());
+      formData.append("negative_keyword", negativeKeyword.trim());
+    }
+    if (inputMode === "separate" && positiveFile && negativeFile) {
+      formData.append("positive_file", positiveFile);
+      formData.append("negative_file", negativeFile);
+    }
     formData.append("k", String(parsedK));
     formData.append("archive_name", archiveName);
     formData.append("wildcard_positions", wildcards);
@@ -166,30 +218,149 @@ export function KmerAnalysisPage() {
   };
 
   const runs = useMemo(() => result?.runs ?? [], [result]);
+  const proteomeMappingState =
+    result && runs[0]
+      ? {
+          resultId: result.result_id,
+          positiveFilename: runs[0].ad_filename,
+          negativeFilename: runs[0].nc_filename,
+          inputMode,
+          positiveKeyword,
+          negativeKeyword,
+        }
+      : undefined;
+
+  const renderUploadCard = (
+    inputId: string,
+    label: string,
+    helperText: string,
+    selectedFileName: string | null,
+    onFileChange: (file: File | null) => void,
+  ) => (
+    <div className="upload-card kmer-upload-card">
+      <div className="upload-card__top">
+        <div>
+          <span className="upload-card__label">{label}</span>
+          <p className="upload-card__helper">{helperText}</p>
+        </div>
+        <label className="upload-trigger" htmlFor={inputId}>
+          Choose file
+        </label>
+      </div>
+      <input
+        id={inputId}
+        className="sr-only-file-input"
+        type="file"
+        accept=".xlsx,.csv"
+        onChange={(event) => {
+          const files = event.target.files;
+          const selectedFile = files && files.length > 0 ? files[0] : null;
+          onFileChange(selectedFile);
+        }}
+      />
+      <div className={`upload-file-display ${selectedFileName ? "upload-file-display--selected" : ""}`}>
+        {selectedFileName ?? "No file selected"}
+      </div>
+    </div>
+  );
 
   return (
     <div className="page-grid">
       <SectionCard
         title="K-mer enrichment analysis"
-        description="Split AD vs. NC cohorts, tile peptides, and run Mann–Whitney U tests for one k-mer size at a time."
+        description="Split cohorts, tile peptides, and run Mann–Whitney U tests for one k-mer size at a time."
       >
         <form className="form-grid" onSubmit={handleSubmit}>
-          <label className="form-field">
-            <span>Merged cohort file</span>
-            <input
-              className="file-input"
-              type="file"
-              accept=".xlsx,.csv"
-              onChange={(event) => {
-                const files = event.target.files;
-                const selectedFile = files && files.length > 0 ? files[0] : null;
-                setDataFile(selectedFile);
-                setDataFileName(selectedFile?.name ?? null);
-              }}
-            />
-            <small>Original file should contain alternating AD_/NC_ columns with sequence/count pairs.</small>
-            {dataFileName && <small>Selected file: {dataFileName}</small>}
-          </label>
+          <fieldset className="form-field input-mode-group">
+            <legend>Input type</legend>
+            <div className="input-mode-options">
+              <label className={`input-mode-option ${inputMode === "merged" ? "input-mode-option--active" : ""}`}>
+                <input
+                  type="radio"
+                  name="kmer-input-mode"
+                  value="merged"
+                  checked={inputMode === "merged"}
+                  onChange={() => setInputMode("merged")}
+                />
+                <span>Merged cohort file</span>
+                <small>Split columns using positive and negative keywords.</small>
+              </label>
+              <label className={`input-mode-option ${inputMode === "separate" ? "input-mode-option--active" : ""}`}>
+                <input
+                  type="radio"
+                  name="kmer-input-mode"
+                  value="separate"
+                  checked={inputMode === "separate"}
+                  onChange={() => setInputMode("separate")}
+                />
+                <span>Separate cohort files</span>
+                <small>Upload positive and negative cohort files directly.</small>
+              </label>
+            </div>
+          </fieldset>
+
+          {inputMode === "merged" ? (
+            <>
+              {renderUploadCard(
+                "kmer-merged-file",
+                "Merged cohort file",
+                "Original file should contain alternating cohort columns with sequence/count pairs.",
+                dataFileName,
+                (selectedFile) => {
+                  setDataFile(selectedFile);
+                  setDataFileName(selectedFile?.name ?? null);
+                },
+              )}
+
+              <div className="settings-grid">
+                <label className="form-field">
+                  <span>Positive column keyword</span>
+                  <input
+                    type="text"
+                    value={positiveKeyword}
+                    onChange={(event) => setPositiveKeyword(event.target.value)}
+                    placeholder="AD"
+                  />
+                  <small>Columns starting with this keyword are treated as the positive cohort.</small>
+                </label>
+
+                <label className="form-field">
+                  <span>Negative column keyword</span>
+                  <input
+                    type="text"
+                    value={negativeKeyword}
+                    onChange={(event) => setNegativeKeyword(event.target.value)}
+                    placeholder="NC"
+                  />
+                  <small>Columns starting with this keyword are treated as the negative cohort.</small>
+                </label>
+              </div>
+            </>
+          ) : (
+            <div className="settings-grid">
+              {renderUploadCard(
+                "kmer-positive-file",
+                "Positive cohort file",
+                "Upload a file containing positive cohort sequence/count columns.",
+                positiveFileName,
+                (selectedFile) => {
+                  setPositiveFile(selectedFile);
+                  setPositiveFileName(selectedFile?.name ?? null);
+                },
+              )}
+
+              {renderUploadCard(
+                "kmer-negative-file",
+                "Negative cohort file",
+                "Upload a file containing negative cohort sequence/count columns.",
+                negativeFileName,
+                (selectedFile) => {
+                  setNegativeFile(selectedFile);
+                  setNegativeFileName(selectedFile?.name ?? null);
+                },
+              )}
+            </div>
+          )}
 
           <div className="form-field form-field--inline">
             <label>
@@ -273,7 +444,7 @@ export function KmerAnalysisPage() {
           description="Highlights the number of kmers enriched in each cohort for the selected k value."
           actions={
             <div className="section-card__actions-group">
-              <Link to="/module3" className="secondary-button">
+              <Link to="/module3" state={proteomeMappingState} className="secondary-button">
                 Open Proteome Mapping
               </Link>
               <DownloadButton resultId={result.result_id} label="Download combined outputs" />
@@ -286,8 +457,8 @@ export function KmerAnalysisPage() {
                 <tr>
                   <th>k-mer size</th>
                   <th>Total kmers</th>
-                  <th>AD-elevated</th>
-                  <th>NC-elevated</th>
+                  <th>Positive-elevated</th>
+                  <th>Negative-elevated</th>
                   <th>Files</th>
                 </tr>
               </thead>

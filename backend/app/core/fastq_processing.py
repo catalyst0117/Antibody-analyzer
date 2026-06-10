@@ -14,6 +14,7 @@ import pandas as pd
 
 
 VALID_BASES = {"A", "T", "C", "G"}
+VALID_AA = set("ACDEFGHIKLMNPQRSTVWYX*")
 
 
 def _ensure_directory(path: Path) -> Path:
@@ -54,12 +55,16 @@ class FastqProcessor:
 
     def _extract_peptides_from_fastq(self, fastq_path: Path) -> Iterable[str]:
         peptides = set()
-        with fastq_path.open("r") as handle:
+        opener = gzip.open if fastq_path.suffix == ".gz" else Path.open
+        with opener(fastq_path, "rt") as handle:
             for line in handle:
+                stripped = line.strip().upper()
                 if line.startswith("@") or line.startswith("+"):
                     continue
                 match = self.pattern.search(line)
                 if not match:
+                    if fastq_path.suffix == ".txt" and len(stripped) >= 12 and not (set(stripped) - VALID_AA):
+                        peptides.add(stripped.replace("*", "X"))
                     continue
                 nt_seq = match.group(0)[10:]
                 if len(nt_seq) != 36 or set(nt_seq) - VALID_BASES:
@@ -69,13 +74,17 @@ class FastqProcessor:
                     peptides.add(aa)
         return peptides
 
-    def _prepare_background(self, background_file: Optional[Path]) -> tuple[set[str], Optional[Path]]:
-        if not background_file:
+    def _prepare_background(self, background_files: Optional[Iterable[Path]]) -> tuple[set[str], Optional[Path]]:
+        background_paths = list(background_files or [])
+        if not background_paths:
             return set(), None
-        if not background_file.exists():
-            raise FileNotFoundError(f"Background file {background_file} does not exist")
 
-        peptides = set(self._extract_peptides_from_fastq(background_file))
+        peptides: set[str] = set()
+        for background_file in background_paths:
+            if not background_file.exists():
+                raise FileNotFoundError(f"Background file {background_file} does not exist")
+            peptides.update(self._extract_peptides_from_fastq(background_file))
+
         if not peptides:
             return set(), None
 
@@ -96,14 +105,14 @@ class FastqProcessor:
     def process(
         self,
         fastq_files: Iterable[Path],
-        background_file: Optional[Path] = None,
+        background_files: Optional[Iterable[Path]] = None,
         output_name: str = "sequence_matrix.xlsx",
     ) -> FastqResult:
         fastq_files = list(fastq_files)
         if not fastq_files:
             raise ValueError("No FASTQ files provided")
 
-        background_set, background_dump = self._prepare_background(background_file)
+        background_set, background_dump = self._prepare_background(background_files)
 
         sample_counters: Dict[str, Counter[str]] = {}
         filtered_outputs: Dict[str, Path] = {}

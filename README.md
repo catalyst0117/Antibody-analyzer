@@ -4,9 +4,9 @@ Antibody Analyzer is a full-stack web app for antibody sequencing workflows. It 
 
 ## Current workflows
 
-- **FASTQ Processor**: upload one or more FASTQ or FASTQ.GZ files, optionally subtract a background library, and generate a ranked peptide matrix.
-- **K-mer Analysis**: upload a merged AD/NC spreadsheet, run Mann-Whitney U testing for a single k value at a time, track progress in the UI, and download the generated CSV bundle.
-- **Proteome Mapping**: upload positive and negative significance files plus a local proteome FASTA, map significant k-mers onto the proteome, and download a bundled output folder with a run summary.
+- **FASTQ Processor**: upload one or more FASTQ or FASTQ.GZ files, optionally subtract one or more background files, and generate a ranked peptide matrix.
+- **K-mer Analysis**: upload either a merged cohort spreadsheet with configurable positive/negative keywords or already-separated positive and negative cohort files, run Mann-Whitney U testing for one k value, track progress in the UI, and download the generated CSV bundle.
+- **Proteome Mapping**: upload positive and negative significance files plus a local proteome FASTA, or open it from a completed K-mer Analysis run with the generated U-test files attached automatically.
 
 ## Highlights
 
@@ -76,7 +76,7 @@ That script opens one terminal for the backend and one for the frontend.
 
 Inputs:
 - one or more sequencing files
-- optional background FASTQ
+- optional background files in FASTQ, FASTQ.GZ, or TXT format
 - output spreadsheet name
 
 Outputs:
@@ -88,7 +88,8 @@ Outputs:
 ### K-mer Analysis
 
 Inputs:
-- merged AD/NC spreadsheet
+- merged cohort spreadsheet with user-selected positive and negative column keywords
+- or already-separated positive and negative cohort files
 - single k value
 - optional wildcard positions
 - optional custom download bundle name
@@ -97,14 +98,15 @@ Inputs:
 Behavior:
 - runs as a background task
 - progress is exposed through the API and shown in the React UI
+- generated U-test positive/negative files can be handed directly to Proteome Mapping
 - preserves latest visible state when navigating away and back in the same browser session
 
 Outputs:
 - split cohort files
 - Mann-Whitney summary CSV
-- AD-enriched CSV
-- NC-enriched CSV
-- matrix CSV
+- positive-elevated CSV
+- negative-elevated CSV
+- matrix CSV with the k-mer column included first
 - downloadable ZIP bundle
 
 ### Proteome Mapping
@@ -120,6 +122,8 @@ Inputs:
 
 Behavior:
 - uses local FASTA mapping only
+- can auto-attach positive and negative U-test CSVs from a completed K-mer Analysis run
+- still allows users to manually replace any carried-over files
 - generates a default output folder name when none is supplied
 - keeps the latest result panel visible when revisiting the section in the same browser session
 
@@ -142,6 +146,10 @@ Outputs:
 - `POST /api/module3-map`
   Runs Proteome Mapping and returns filenames plus a `result_id`.
 - `GET /api/results/{result_id}`
+  Returns stored result metadata.
+- `GET /api/results/{result_id}/files/{filename}`
+  Downloads one generated file from a stored result bundle, used by the K-mer to Proteome Mapping handoff.
+- `GET /api/results/{result_id}/download`
   Downloads the stored ZIP bundle for a completed run.
 
 ## Deployment notes

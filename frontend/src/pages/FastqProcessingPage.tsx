@@ -9,7 +9,7 @@ import { useAsyncTask } from "../hooks/useAsyncTask";
 
 export function FastqProcessingPage() {
   const [files, setFiles] = useState<File[]>([]);
-  const [background, setBackground] = useState<File | null>(null);
+  const [backgroundFiles, setBackgroundFiles] = useState<File[]>([]);
   const [outputName, setOutputName] = useState("sequence_matrix.xlsx");
   const [result, setResult] = useState<FastqResponse | null>(null);
 
@@ -28,9 +28,7 @@ export function FastqProcessingPage() {
     }
     const formData = new FormData();
     files.forEach((file) => formData.append("files", file));
-    if (background) {
-      formData.append("background_file", background);
-    }
+    backgroundFiles.forEach((file) => formData.append("background_files", file));
     formData.append("output_name", outputName);
 
     const response = await execute(formData);
@@ -40,6 +38,50 @@ export function FastqProcessingPage() {
   };
 
   const summaryRows = useMemo(() => result?.summary ?? [], [result]);
+  const formatSelectedFiles = (selectedFiles: File[]) => {
+    if (selectedFiles.length === 0) {
+      return "No files selected";
+    }
+    if (selectedFiles.length === 1) {
+      return selectedFiles[0].name;
+    }
+    return `${selectedFiles.length} files selected: ${selectedFiles.map((file) => file.name).join(", ")}`;
+  };
+
+  const renderUploadCard = (
+    inputId: string,
+    label: string,
+    helperText: string,
+    accept: string,
+    selectedFiles: File[],
+    onFilesChange: (files: File[]) => void,
+  ) => (
+    <div className="upload-card fastq-upload-card">
+      <div className="upload-card__top">
+        <div>
+          <span className="upload-card__label">{label}</span>
+          <p className="upload-card__helper">{helperText}</p>
+        </div>
+        <label className="upload-trigger" htmlFor={inputId}>
+          Choose files
+        </label>
+      </div>
+      <input
+        id={inputId}
+        className="sr-only-file-input"
+        type="file"
+        accept={accept}
+        multiple
+        onChange={(event) => {
+          const targetFiles = event.target.files;
+          onFilesChange(targetFiles ? Array.from(targetFiles) : []);
+        }}
+      />
+      <div className={`upload-file-display ${selectedFiles.length > 0 ? "upload-file-display--selected" : ""}`}>
+        {formatSelectedFiles(selectedFiles)}
+      </div>
+    </div>
+  );
 
   return (
     <div className="page-grid">
@@ -48,34 +90,23 @@ export function FastqProcessingPage() {
         description="Upload sequencing runs to generate ranked peptide matrices with optional background subtraction."
       >
         <form className="form-grid" onSubmit={handleSubmit}>
-          <label className="form-field">
-            <span>FASTQ files</span>
-            <input
-              className="file-input"
-              type="file"
-              accept=".fastq,.fq,.fastq.gz,.fq.gz"
-              multiple
-              onChange={(event) => {
-                const targetFiles = event.target.files;
-                setFiles(targetFiles ? Array.from(targetFiles) : []);
-              }}
-            />
-            <small>Supports plain or gzipped FASTQ files. Multiple uploads allowed.</small>
-          </label>
+          {renderUploadCard(
+            "fastq-files",
+            "FASTQ files",
+            "Supports plain or gzipped FASTQ files. Multiple uploads allowed.",
+            ".fastq,.fq,.fastq.gz,.fq.gz",
+            files,
+            setFiles,
+          )}
 
-          <label className="form-field">
-            <span>Background FASTQ (optional)</span>
-            <input
-              className="file-input"
-              type="file"
-              accept=".fastq,.fq,.fastq.gz,.fq.gz"
-              onChange={(event) => {
-                const fileList = event.target.files;
-                setBackground(fileList && fileList.length > 0 ? fileList[0] : null);
-              }}
-            />
-            <small>Sequences detected in the background file will be filtered out.</small>
-          </label>
+          {renderUploadCard(
+            "fastq-background-files",
+            "Background files (optional)",
+            "Upload one or more FASTQ, FASTQ.GZ, or TXT background files. They will be combined before filtering.",
+            ".fastq,.fq,.fastq.gz,.fq.gz,.txt",
+            backgroundFiles,
+            setBackgroundFiles,
+          )}
 
           <label className="form-field">
             <span>Output name</span>

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 
 import { apiClient } from "../api/client";
 import { Module3Response } from "../api/types";
@@ -8,6 +9,15 @@ import { StatusBanner } from "../components/StatusBanner";
 import { useAsyncTask } from "../hooks/useAsyncTask";
 
 const PROTEOME_MAPPING_SESSION_KEY = "proteome-mapping-page-state";
+
+type KmerProteomeMappingHandoffState = {
+  resultId: string;
+  positiveFilename: string;
+  negativeFilename: string;
+  inputMode?: "merged" | "separate";
+  positiveKeyword?: string;
+  negativeKeyword?: string;
+};
 
 type ProteomeMappingSessionState = {
   positiveFileName: string | null;
@@ -36,6 +46,8 @@ function loadProteomeMappingSessionState(): ProteomeMappingSessionState | null {
 }
 
 export function Module3MappingPage() {
+  const location = useLocation();
+  const handoffState = location.state as KmerProteomeMappingHandoffState | null;
   const savedState = loadProteomeMappingSessionState();
   const [positiveFile, setPositiveFile] = useState<File | null>(null);
   const [negativeFile, setNegativeFile] = useState<File | null>(null);
@@ -48,6 +60,7 @@ export function Module3MappingPage() {
   const [qCutoffValue, setQCutoffValue] = useState(savedState?.qCutoffValue ?? "0.01");
   const [wildcards, setWildcards] = useState(savedState?.wildcards ?? false);
   const [result, setResult] = useState<Module3Response | null>(savedState?.result ?? null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
 
   const { execute, loading, error } = useAsyncTask(async (formData: FormData) => {
     const response = await apiClient.post<Module3Response>("/module3-map", formData, {
@@ -72,6 +85,55 @@ export function Module3MappingPage() {
     };
     window.sessionStorage.setItem(PROTEOME_MAPPING_SESSION_KEY, JSON.stringify(nextState));
   }, [negativeFileName, outputFolderName, positiveFileName, proteomeFileName, qCutoffValue, result, topNValue, wildcards]);
+
+  useEffect(() => {
+    if (!handoffState?.resultId || !handoffState.positiveFilename || !handoffState.negativeFilename) {
+      return;
+    }
+
+    let cancelled = false;
+    const loadHandoffFiles = async () => {
+      try {
+        const [positiveResponse, negativeResponse] = await Promise.all([
+          apiClient.get<Blob>(
+            `/results/${handoffState.resultId}/files/${encodeURIComponent(handoffState.positiveFilename)}`,
+            { responseType: "blob" },
+          ),
+          apiClient.get<Blob>(
+            `/results/${handoffState.resultId}/files/${encodeURIComponent(handoffState.negativeFilename)}`,
+            { responseType: "blob" },
+          ),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const nextPositiveFile = new File([positiveResponse.data], handoffState.positiveFilename, {
+          type: "text/csv",
+        });
+        const nextNegativeFile = new File([negativeResponse.data], handoffState.negativeFilename, {
+          type: "text/csv",
+        });
+
+        setPositiveFile(nextPositiveFile);
+        setNegativeFile(nextNegativeFile);
+        setPositiveFileName(nextPositiveFile.name);
+        setNegativeFileName(nextNegativeFile.name);
+        setHandoffError(null);
+      } catch {
+        if (!cancelled) {
+          setHandoffError("Unable to attach the K-mer U-test files automatically. You can upload them manually.");
+        }
+      }
+    };
+
+    void loadHandoffFiles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handoffState?.negativeFilename, handoffState?.positiveFilename, handoffState?.resultId]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -292,6 +354,9 @@ export function Module3MappingPage() {
         </form>
 
         {error && <StatusBanner tone="error" title="Proteome Mapping failed" message={error} />}
+        {handoffError && !error && (
+          <StatusBanner tone="error" title="K-mer file handoff failed" message={handoffError} />
+        )}
         {result && !error && (
           <StatusBanner
             tone="success"

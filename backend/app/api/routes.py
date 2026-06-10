@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.core.fastq_processing import FastqProcessor
 from app.core.kmer_analysis import analyze_single_k, split_input_by_group
@@ -43,8 +44,15 @@ def get_kmer_task_store() -> KmerTaskStore:
 def _run_kmer_task(
     *,
     task_id: str,
-    data_bytes: bytes,
-    data_filename: str,
+    data_bytes: bytes | None,
+    data_filename: str | None,
+    positive_bytes: bytes | None,
+    positive_filename: str | None,
+    negative_bytes: bytes | None,
+    negative_filename: str | None,
+    input_mode: str,
+    positive_keyword: str,
+    negative_keyword: str,
     k: int,
     wildcard_positions_list: List[int],
     normalize: bool,
@@ -56,11 +64,31 @@ def _run_kmer_task(
         task_store.update_task(task_id, status="running", progress=5, message="Preparing analysis")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            data_path = tmp_path / data_filename
-            data_path.write_bytes(data_bytes)
+            if input_mode == "separate":
+                if positive_bytes is None or negative_bytes is None or not positive_filename or not negative_filename:
+                    raise ValueError("Upload both positive and negative cohort files.")
+                pos_file = tmp_path / positive_filename
+                neg_file = tmp_path / negative_filename
+                pos_file.write_bytes(positive_bytes)
+                neg_file.write_bytes(negative_bytes)
+                data_path = pos_file
+                output_positive_label = "pos"
+                output_negative_label = "neg"
+                task_store.update_task(task_id, progress=8, message="Using uploaded positive and negative cohorts")
+            else:
+                if data_bytes is None or not data_filename:
+                    raise ValueError("Upload a merged cohort file.")
+                data_path = tmp_path / data_filename
+                data_path.write_bytes(data_bytes)
 
-            task_store.update_task(task_id, progress=8, message="Splitting AD and NC cohorts")
-            pos_file, neg_file = split_input_by_group(data_path)
+                task_store.update_task(task_id, progress=8, message="Splitting positive and negative cohorts")
+                pos_file, neg_file = split_input_by_group(
+                    data_path,
+                    positive_keyword=positive_keyword,
+                    negative_keyword=negative_keyword,
+                )
+                output_positive_label = positive_keyword
+                output_negative_label = negative_keyword
             result = analyze_single_k(
                 data_path,
                 pos_file,
@@ -69,6 +97,8 @@ def _run_kmer_task(
                 wildcard_positions=wildcard_positions_list,
                 normalize=normalize,
                 workdir=tmp_path / "outputs",
+                positive_label=output_positive_label,
+                negative_label=output_negative_label,
                 progress_callback=lambda progress, message: task_store.update_task(
                     task_id,
                     status="running",
@@ -96,7 +126,7 @@ def _run_kmer_task(
                     "runs": [response_run.model_dump()],
                 },
                 files=files_to_archive,
-                download_name=archive_name or f"{Path(data_filename).stem}_k{k}_results",
+                download_name=archive_name or f"{data_path.stem}_k{k}_results",
             )
 
             task_store.complete_task(task_id, KmerResponse(result_id=result_id, runs=[response_run]))
@@ -107,7 +137,7 @@ def _run_kmer_task(
 @router.post("/process-fastq", response_model=FastqResponse)
 async def process_fastq(
     files: List[UploadFile] = File(...),
-    background_file: UploadFile | None = File(None),
+    background_files: List[UploadFile] = File(default=[]),
     output_name: str = Form("sequence_matrix.xlsx"),
     store: ResultStore = Depends(get_store),
 ) -> FastqResponse:
@@ -123,14 +153,19 @@ async def process_fastq(
             destination.write_bytes(await upload.read())
             saved_files.append(destination)
 
-        bg_path = None
-        if background_file:
-            bg_filename = background_file.filename or "background.fastq"
+        background_paths: List[Path] = []
+        for index, upload in enumerate(background_files):
+            bg_filename = upload.filename or f"background_{index}.fastq"
             bg_path = tmp_path / bg_filename
-            bg_path.write_bytes(await background_file.read())
+            bg_path.write_bytes(await upload.read())
+            background_paths.append(bg_path)
 
         processor = FastqProcessor(workdir=tmp_path / "outputs")
-        result = processor.process(saved_files, background_file=bg_path, output_name=output_name)
+        result = processor.process(
+            saved_files,
+            background_files=background_paths,
+            output_name=output_name,
+        )
 
         summary_payload = [
             FastqSampleSummary(
@@ -170,7 +205,12 @@ async def process_fastq(
 
 @router.post("/analyze-kmers", response_model=KmerTaskCreatedResponse)
 async def analyze_kmers(
-    data_file: UploadFile = File(...),
+    data_file: UploadFile | None = File(None),
+    positive_file: UploadFile | None = File(None),
+    negative_file: UploadFile | None = File(None),
+    input_mode: str = Form("merged"),
+    positive_keyword: str = Form("AD"),
+    negative_keyword: str = Form("NC"),
     k: int = Form(4),
     wildcard_positions: str = Form(""),
     normalize: bool = Form(True),
@@ -180,13 +220,24 @@ async def analyze_kmers(
 ) -> KmerTaskCreatedResponse:
     if k < 4:
         raise HTTPException(status_code=400, detail="k must be >= 4.")
+    if input_mode not in {"merged", "separate"}:
+        raise HTTPException(status_code=400, detail="input_mode must be 'merged' or 'separate'.")
+    if input_mode == "merged" and data_file is None:
+        raise HTTPException(status_code=400, detail="Upload a merged cohort file.")
+    if input_mode == "separate" and (positive_file is None or negative_file is None):
+        raise HTTPException(status_code=400, detail="Upload both positive and negative cohort files.")
+
     wildcard_positions_list = [
         int(pos.strip())
         for pos in wildcard_positions.split(",")
         if pos.strip()
     ]
-    data_bytes = await data_file.read()
-    data_filename = data_file.filename or "patient_data.xlsx"
+    data_bytes = await data_file.read() if data_file else None
+    data_filename = (data_file.filename or "patient_data.xlsx") if data_file else None
+    positive_bytes = await positive_file.read() if positive_file else None
+    positive_filename = (positive_file.filename or "positive_cohort.xlsx") if positive_file else None
+    negative_bytes = await negative_file.read() if negative_file else None
+    negative_filename = (negative_file.filename or "negative_cohort.xlsx") if negative_file else None
 
     task_id = task_store.create_task()
     worker = threading.Thread(
@@ -195,6 +246,13 @@ async def analyze_kmers(
             "task_id": task_id,
             "data_bytes": data_bytes,
             "data_filename": data_filename,
+            "positive_bytes": positive_bytes,
+            "positive_filename": positive_filename,
+            "negative_bytes": negative_bytes,
+            "negative_filename": negative_filename,
+            "input_mode": input_mode,
+            "positive_keyword": positive_keyword,
+            "negative_keyword": negative_keyword,
             "k": k,
             "wildcard_positions_list": wildcard_positions_list,
             "normalize": normalize,
@@ -323,6 +381,33 @@ async def get_result_summary(result_id: str, store: ResultStore = Depends(get_st
     if not summary:
         raise HTTPException(status_code=404, detail="Result not found")
     return summary
+
+
+@router.get("/results/{result_id}/files/{filename:path}")
+async def download_result_file(
+    result_id: str,
+    filename: str,
+    store: ResultStore = Depends(get_store),
+):
+    archive_path = store.get_archive_path(result_id)
+    if not archive_path or not archive_path.exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    requested_name = Path(filename).name
+    with zipfile.ZipFile(archive_path) as archive:
+        matched_member = next(
+            (member for member in archive.namelist() if Path(member).name == requested_name),
+            None,
+        )
+        if not matched_member:
+            raise HTTPException(status_code=404, detail="File not found in result bundle")
+        content = archive.read(matched_member)
+
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{requested_name}"'},
+    )
 
 
 @router.get("/results/{result_id}/download")

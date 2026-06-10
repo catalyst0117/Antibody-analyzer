@@ -53,7 +53,18 @@ class MannWhitneyResult:
 ProgressCallback = Callable[[int, str], None]
 
 
-def split_input_by_group(input_path: Path) -> Tuple[Path, Path]:
+def _group_label_for_filename(label: str, fallback: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in label.strip())
+    return cleaned or fallback
+
+
+def _with_optional_suffix(base: str, *suffixes: str) -> str:
+    parts = [base]
+    parts.extend(suffix.strip("_") for suffix in suffixes if suffix and suffix.strip("_"))
+    return "_".join(parts)
+
+
+def split_input_by_group(input_path: Path, positive_keyword: str = "AD", negative_keyword: str = "NC") -> Tuple[Path, Path]:
     if input_path.suffix == ".xlsx":
         df = pd.read_excel(input_path)
     elif input_path.suffix == ".csv":
@@ -61,8 +72,16 @@ def split_input_by_group(input_path: Path) -> Tuple[Path, Path]:
     else:
         raise ValueError("Unsupported file format.")
 
-    ad_cols: List[str] = []
-    nc_cols: List[str] = []
+    positive_keyword = positive_keyword.strip()
+    negative_keyword = negative_keyword.strip()
+    if not positive_keyword or not negative_keyword:
+        raise ValueError("Positive and negative keywords are required.")
+
+    pos_cols: List[str] = []
+    neg_cols: List[str] = []
+
+    def matches_keyword(header: str, keyword: str) -> bool:
+        return header.lower().startswith(keyword.lower())
 
     i = 0
     while i < df.shape[1] - 1:
@@ -70,33 +89,40 @@ def split_input_by_group(input_path: Path) -> Tuple[Path, Path]:
         if not header or header.startswith("Unnamed:"):
             i += 1
             continue
-        if header.startswith("AD_"):
-            ad_cols.extend(df.columns[i : i + 2])
+        if matches_keyword(header, positive_keyword):
+            pos_cols.extend(df.columns[i : i + 2])
             i += 2
-        elif header.startswith("NC_"):
-            nc_cols.extend(df.columns[i : i + 2])
+        elif matches_keyword(header, negative_keyword):
+            neg_cols.extend(df.columns[i : i + 2])
             i += 2
         else:
             i += 1
 
-    df_ad = df[ad_cols].copy()
-    df_nc = df[nc_cols].copy()
+    if not pos_cols:
+        raise ValueError(f"No columns matched the positive keyword '{positive_keyword}'.")
+    if not neg_cols:
+        raise ValueError(f"No columns matched the negative keyword '{negative_keyword}'.")
 
-    for subset in (df_ad, df_nc):
+    df_pos = df[pos_cols].copy()
+    df_neg = df[neg_cols].copy()
+
+    for subset in (df_pos, df_neg):
         for idx in range(1, subset.shape[1], 2):
             subset.columns.values[idx] = "count"
 
-    output_ad = input_path.parent / f"{input_path.stem}_AD{input_path.suffix}"
-    output_nc = input_path.parent / f"{input_path.stem}_NC{input_path.suffix}"
+    pos_label = _group_label_for_filename(positive_keyword, "positive")
+    neg_label = _group_label_for_filename(negative_keyword, "negative")
+    output_pos = input_path.parent / f"{input_path.stem}_{pos_label}{input_path.suffix}"
+    output_neg = input_path.parent / f"{input_path.stem}_{neg_label}{input_path.suffix}"
 
     if input_path.suffix == ".xlsx":
-        df_ad.to_excel(output_ad, index=False)
-        df_nc.to_excel(output_nc, index=False)
+        df_pos.to_excel(output_pos, index=False)
+        df_neg.to_excel(output_neg, index=False)
     else:
-        df_ad.to_csv(output_ad, index=False)
-        df_nc.to_csv(output_nc, index=False)
+        df_pos.to_csv(output_pos, index=False)
+        df_neg.to_csv(output_neg, index=False)
 
-    return output_ad, output_nc
+    return output_pos, output_neg
 
 
 def apply_chi_square_filter(
@@ -214,6 +240,8 @@ def run_mannwhitney(
     neg_cols: Sequence[str],
     output_prefix: Path,
     matrix_file: Path,
+    positive_label: str = "AD",
+    negative_label: str = "NC",
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> MannWhitneyResult:
     kmers = matrix.index
@@ -254,8 +282,10 @@ def run_mannwhitney(
     ).sort_values("p_value")
 
     result_file = output_prefix.with_suffix(".csv")
-    ad_file = output_prefix.with_name(output_prefix.stem + "_AD.csv")
-    nc_file = output_prefix.with_name(output_prefix.stem + "_NC.csv")
+    positive_file_label = _group_label_for_filename(positive_label, "positive")
+    negative_file_label = _group_label_for_filename(negative_label, "negative")
+    ad_file = output_prefix.with_name(f"{output_prefix.stem}_{positive_file_label}.csv")
+    nc_file = output_prefix.with_name(f"{output_prefix.stem}_{negative_file_label}.csv")
 
     result_df.to_csv(result_file, index=False)
     result_df[result_df["mean_rank_diff"] > 0].to_csv(ad_file, index=False)
@@ -281,6 +311,8 @@ def analyze_single_k(
     wildcard_positions: Sequence[int] | None = None,
     normalize: bool = True,
     workdir: Optional[Path] = None,
+    positive_label: str = "AD",
+    negative_label: str = "NC",
     progress_callback: Optional[ProgressCallback] = None,
 ) -> MannWhitneyResult:
     workdir = Path(workdir or input_path.parent)
@@ -289,7 +321,7 @@ def analyze_single_k(
     wildcard_positions = list(wildcard_positions or [])
 
     if progress_callback:
-        progress_callback(10, "Tiling AD cohort")
+        progress_callback(10, "Tiling positive cohort")
     pos_dicts, filtered_pos = tile_patient_file(
         pos_file,
         kmer_length=k,
@@ -297,7 +329,7 @@ def analyze_single_k(
     )
 
     if progress_callback:
-        progress_callback(30, "Tiling NC cohort")
+        progress_callback(30, "Tiling negative cohort")
     neg_dicts, filtered_neg = tile_patient_file(
         neg_file,
         kmer_length=k,
@@ -310,14 +342,15 @@ def analyze_single_k(
         progress_callback(50, "Building k-mer matrix")
     matrix = build_kmer_matrix({**pos_dicts, **neg_dicts}, kmers_filter=filter_set, normalize=normalize)
 
-    wildcard_label = "".join(str(i) for i in wildcard_positions) or "no_wildcards"
-    matrix_file = workdir / f"{input_path.stem}_matrix_{k}mers_{wildcard_label}.csv"
-    matrix.to_csv(matrix_file, index=False)
+    wildcard_label = f"[{''.join(str(i) for i in wildcard_positions)}]" if wildcard_positions else ""
+    matrix_file = workdir / f"{_with_optional_suffix(input_path.stem, 'matrix', f'{k}mers', wildcard_label)}.csv"
+    matrix.index.name = "kmer"
+    matrix.to_csv(matrix_file)
 
     pos_cols = list(pos_dicts.keys())
     neg_cols = list(neg_dicts.keys())
 
-    output_prefix = workdir / f"{input_path.stem}_U_test_{k}mers_{wildcard_label}"
+    output_prefix = workdir / _with_optional_suffix(input_path.stem, "U_test", f"{k}mers", wildcard_label)
     if progress_callback:
         progress_callback(60, "Running Mann-Whitney tests")
     result = run_mannwhitney(
@@ -326,6 +359,8 @@ def analyze_single_k(
         neg_cols,
         output_prefix=output_prefix,
         matrix_file=matrix_file,
+        positive_label=positive_label,
+        negative_label=negative_label,
         progress_callback=(
             lambda current, total: progress_callback(
                 60 + int((current / total) * 30),
