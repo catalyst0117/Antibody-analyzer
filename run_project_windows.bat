@@ -18,6 +18,10 @@ pip install -r "%ROOT%backend\requirements.txt"
 echo Starting backend...
 start "Antibody Backend" cmd /k "cd /d %ROOT%backend && call .venv\Scripts\activate.bat && uvicorn app.main:app --reload"
 
+echo Installing frontend dependencies...
+cd /d "%ROOT%frontend"
+call npm install
+
 echo Starting frontend...
 start "Antibody Frontend" cmd /k "cd /d %ROOT%frontend && npm run dev"
 
@@ -27,15 +31,3 @@ echo Frontend: http://localhost:5173
 echo.
 echo Two terminal windows were opened.
 pause
-
-@REM #!/usr/bin/env bash
-@REM set -e
-
-@REM read -p "Enter path to input txt file: " INPUT_TXT
-@REM read -p "Enter disease name (press Enter for broad disease search): " DISEASE
-
-@REM if [ -z "$DISEASE" ]; then
-@REM     python gene_report.py "$INPUT_TXT"
-@REM else
-@REM     python gene_report.py "$INPUT_TXT" --disease "$DISEASE"
-@REM fi
