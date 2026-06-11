@@ -16,7 +16,7 @@ python -m pip install --upgrade pip
 pip install -r "%ROOT%backend\requirements.txt"
 
 echo Starting backend...
-start "Antibody Backend" cmd /k "cd /d %ROOT%backend && call .venv\Scripts\activate.bat && uvicorn app.main:app --reload"
+start "Antibody Backend" cmd /k "cd /d %ROOT%backend && call .venv\Scripts\activate.bat && python -muvicorn app.main:app --reload"
 
 echo Installing frontend dependencies...
 cd /d "%ROOT%frontend"
