@@ -23,6 +23,7 @@ export type KmerResultSummary = {
   ad_filename: string;
   nc_filename: string;
   matrix_filename: string;
+  volcano_filename?: string;
 };
 
 export type KmerResponse = {

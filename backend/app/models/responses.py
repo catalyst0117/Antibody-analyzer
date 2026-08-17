@@ -30,6 +30,7 @@ class KmerResultSummary(BaseModel):
     ad_filename: str
     nc_filename: str
     matrix_filename: str
+    volcano_filename: str
 
 
 class KmerResponse(BaseModel):

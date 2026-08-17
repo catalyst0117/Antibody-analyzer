@@ -93,6 +93,7 @@ Inputs:
 - or already-separated positive and negative cohort files
 - single k value
 - optional wildcard positions
+- optional maximum percentage of zero-valued samples for statistical output
 - optional custom download bundle name
 - normalize-counts toggle
 
@@ -103,6 +104,8 @@ Behavior:
   filtering independently to each sample
 - always uses pre-filter sample totals for normalized Mann-Whitney inputs
 - optionally writes the downloadable matrix as raw counts or normalized values
+- can omit sparse k-mers from Mann-Whitney and result CSVs without changing the
+  downloadable matrix
 - generated U-test positive/negative files can be handed directly to Proteome Mapping
 - preserves latest visible state when navigating away and back in the same browser session
 
@@ -112,6 +115,8 @@ Outputs:
 - positive-elevated CSV
 - negative-elevated CSV
 - matrix CSV with the k-mer column included first
+- interactive volcano plot HTML with hover details, search, zoom, pan, and an
+  adjustable Q-value cutoff
 - downloadable ZIP bundle
 
 ### Proteome Mapping

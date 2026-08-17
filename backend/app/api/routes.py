@@ -56,6 +56,7 @@ def _run_kmer_task(
     k: int,
     wildcard_positions_list: List[int],
     normalize: bool,
+    max_zero_percentage: float,
     archive_name: str,
     store: ResultStore,
     task_store: KmerTaskStore,
@@ -96,6 +97,7 @@ def _run_kmer_task(
                 k=k,
                 wildcard_positions=wildcard_positions_list,
                 normalize=normalize,
+                max_zero_percentage=max_zero_percentage,
                 workdir=tmp_path / "outputs",
                 positive_label=output_positive_label,
                 negative_label=output_negative_label,
@@ -116,9 +118,18 @@ def _run_kmer_task(
                 ad_filename=result.ad_file.name,
                 nc_filename=result.nc_file.name,
                 matrix_filename=result.matrix_file.name,
+                volcano_filename=result.volcano_file.name,
             )
 
-            files_to_archive = [pos_file, neg_file, result.result_file, result.ad_file, result.nc_file, result.matrix_file]
+            files_to_archive = [
+                pos_file,
+                neg_file,
+                result.result_file,
+                result.ad_file,
+                result.nc_file,
+                result.matrix_file,
+                result.volcano_file,
+            ]
             task_store.update_task(task_id, progress=98, message="Bundling result files")
             result_id = store.create_result(
                 summary={
@@ -214,6 +225,7 @@ async def analyze_kmers(
     k: int = Form(4),
     wildcard_positions: str = Form(""),
     normalize: bool = Form(True),
+    max_zero_percentage: float = Form(100.0),
     archive_name: str = Form(""),
     store: ResultStore = Depends(get_store),
     task_store: KmerTaskStore = Depends(get_kmer_task_store),
@@ -226,6 +238,11 @@ async def analyze_kmers(
         raise HTTPException(status_code=400, detail="Upload a merged cohort file.")
     if input_mode == "separate" and (positive_file is None or negative_file is None):
         raise HTTPException(status_code=400, detail="Upload both positive and negative cohort files.")
+    if not 0 <= max_zero_percentage <= 100:
+        raise HTTPException(
+            status_code=400,
+            detail="max_zero_percentage must be between 0 and 100.",
+        )
 
     wildcard_positions_list = [
         int(pos.strip())
@@ -256,6 +273,7 @@ async def analyze_kmers(
             "k": k,
             "wildcard_positions_list": wildcard_positions_list,
             "normalize": normalize,
+            "max_zero_percentage": max_zero_percentage,
             "archive_name": archive_name,
             "store": store,
             "task_store": task_store,
@@ -405,7 +423,7 @@ async def download_result_file(
 
     return Response(
         content=content,
-        media_type="text/csv",
+        media_type="text/html" if requested_name.lower().endswith(".html") else "text/csv",
         headers={"Content-Disposition": f'attachment; filename="{requested_name}"'},
     )
 

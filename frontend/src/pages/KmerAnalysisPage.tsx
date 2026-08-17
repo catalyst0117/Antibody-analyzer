@@ -27,6 +27,7 @@ type KmerSessionState = {
   archiveName: string;
   wildcards: string;
   normalize: boolean;
+  maxZeroPercentage: string;
   result: KmerResponse | null;
   taskId: string | null;
   taskStatus: KmerTaskStatusResponse | null;
@@ -64,6 +65,9 @@ export function KmerAnalysisPage() {
   const [archiveName, setArchiveName] = useState(savedState?.archiveName ?? "");
   const [wildcards, setWildcards] = useState(savedState?.wildcards ?? "");
   const [normalize, setNormalize] = useState(savedState?.normalize ?? true);
+  const [maxZeroPercentage, setMaxZeroPercentage] = useState(
+    savedState?.maxZeroPercentage ?? "100",
+  );
   const [result, setResult] = useState<KmerResponse | null>(savedState?.result ?? null);
   const [taskId, setTaskId] = useState<string | null>(savedState?.taskId ?? null);
   const [taskStatus, setTaskStatus] = useState<KmerTaskStatusResponse | null>(savedState?.taskStatus ?? null);
@@ -85,6 +89,7 @@ export function KmerAnalysisPage() {
       archiveName,
       wildcards,
       normalize,
+      maxZeroPercentage,
       result,
       taskId,
       taskStatus,
@@ -99,6 +104,7 @@ export function KmerAnalysisPage() {
     inputMode,
     kValue,
     loading,
+    maxZeroPercentage,
     negativeFileName,
     negativeKeyword,
     normalize,
@@ -202,6 +208,16 @@ export function KmerAnalysisPage() {
       return;
     }
 
+    const parsedMaxZeroPercentage = Number.parseFloat(maxZeroPercentage);
+    if (
+      !Number.isFinite(parsedMaxZeroPercentage) ||
+      parsedMaxZeroPercentage < 0 ||
+      parsedMaxZeroPercentage > 100
+    ) {
+      setError("Maximum zero percentage must be a number between 0 and 100.");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("input_mode", inputMode);
     if (inputMode === "merged" && dataFile) {
@@ -217,6 +233,7 @@ export function KmerAnalysisPage() {
     formData.append("archive_name", archiveName);
     formData.append("wildcard_positions", wildcards);
     formData.append("normalize", String(normalize));
+    formData.append("max_zero_percentage", String(parsedMaxZeroPercentage));
 
     setError(null);
     setTaskId(null);
@@ -425,6 +442,21 @@ export function KmerAnalysisPage() {
             <small>Leave empty for strict k-mers. Use unique, comma-separated, zero-indexed positions.</small>
           </label>
 
+          <label className="form-field">
+            <span>Discard when zero values exceed (%)</span>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={maxZeroPercentage}
+              onChange={(event) => setMaxZeroPercentage(event.target.value)}
+            />
+            <small>
+              Applies only to Mann–Whitney and result CSVs. The downloadable matrix remains unchanged.
+            </small>
+          </label>
+
           <label className="form-field form-checkbox">
             <input
               type="checkbox"
@@ -439,7 +471,7 @@ export function KmerAnalysisPage() {
             <button type="submit" className="primary-button" disabled={loading}>
               {loading ? "Running analysis..." : "Start analysis"}
             </button>
-            {result && <DownloadButton resultId={result.result_id} label="Download CSV bundle" />}
+            {result && <DownloadButton resultId={result.result_id} label="Download result bundle" />}
           </div>
         </form>
 
@@ -460,7 +492,7 @@ export function KmerAnalysisPage() {
           <StatusBanner
             tone="success"
             title="K-mer analysis ready"
-            message="Download CSV exports for the completed k-mer run."
+            message="Download the completed analysis outputs, including the interactive volcano plot."
           />
         )}
       </SectionCard>
@@ -502,6 +534,7 @@ export function KmerAnalysisPage() {
                         <li>{run.ad_filename}</li>
                         <li>{run.nc_filename}</li>
                         <li>{run.matrix_filename}</li>
+                        {run.volcano_filename && <li>{run.volcano_filename}</li>}
                       </ul>
                     </td>
                   </tr>

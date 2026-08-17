@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import product
+import json
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -51,6 +52,7 @@ class MannWhitneyResult:
     ad_file: Path
     nc_file: Path
     matrix_file: Path
+    volcano_file: Path
 
 
 @dataclass(frozen=True)
@@ -374,6 +376,87 @@ def build_kmer_matrix(
     return matrix
 
 
+def _filter_kmers_by_zero_percentage(
+    matrix: pd.DataFrame,
+    kmers: Sequence[str],
+    max_zero_percentage: float,
+) -> list[str]:
+    """Return output k-mers at or below the allowed percentage of zero cells."""
+    if not 0 <= max_zero_percentage <= 100:
+        raise ValueError("max_zero_percentage must be between 0 and 100.")
+    zero_percentages = matrix.eq(0).mean(axis=1).mul(100)
+    return [
+        kmer
+        for kmer in kmers
+        if float(zero_percentages.loc[kmer]) <= max_zero_percentage
+    ]
+
+
+def _write_volcano_plot(
+    results: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """Write a self-contained interactive HTML volcano plot."""
+    rows = [
+        [
+            str(row.kmer),
+            float(row.p_value),
+            float(row.mean_rank_diff),
+            float(row[3]),
+        ]
+        for row in results.itertuples(index=False)
+    ]
+    point_data = json.dumps(rows, separators=(",", ":"))
+    html = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Interactive MWU volcano plot</title>
+<style>
+:root{font-family:Inter,system-ui,sans-serif;color:#17212b;background:#f4f7f9}*{box-sizing:border-box}
+body{margin:0;padding:22px}.shell{max-width:1500px;margin:auto}.top{display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:24px;margin:0 auto 0 0}.control{display:grid;gap:4px;font-size:12px;color:#52606d}.control input{height:36px;border:1px solid #b0bec5;border-radius:7px;padding:0 10px;background:white}.search-result{width:100%;min-height:18px;margin:-7px 0 7px;color:#455a64;font-size:12px}.search-result.error{color:#b71c1c}
+button{height:36px;border:0;border-radius:7px;padding:0 14px;background:#263238;color:white;cursor:pointer}.stats{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin-bottom:12px}
+.stat{background:white;border:1px solid #dce4e8;border-radius:9px;padding:10px 14px}.stat b{font-size:20px;display:block}.stat span{font-size:12px;color:#607d8b}
+.plot{position:relative;height:min(72vh,820px);min-height:520px;background:white;border:1px solid #dce4e8;border-radius:10px;overflow:hidden}canvas{width:100%;height:100%;display:block;cursor:crosshair}
+.tip{position:absolute;display:none;pointer-events:none;background:#17212bee;color:white;padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;box-shadow:0 4px 16px #0004}
+.help{margin:9px 3px;color:#607d8b;font-size:12px}.legend{display:flex;gap:15px;align-items:center}.dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:5px}.red{background:#d32f2f}.blue{background:#1976d2}.gray{background:#90a4ae}
+@media(max-width:700px){.stats{grid-template-columns:1fr 1fr}}
+</style></head><body><div class="shell">
+<div class="top"><h1>Interactive MWU volcano plot</h1>
+<label class="control">Search k-mer<input id="search" placeholder="e.g. ACDG" autocomplete="off"></label><button id="find">Find k-mer</button>
+<label class="control">Q-value cutoff<input id="cutoff" type="number" min="0" max="1" step="0.001" value="0.05"></label>
+<button id="reset">Reset view</button></div><div class="search-result" id="searchResult" aria-live="polite">Enter a complete k-mer to locate and mark it.</div>
+<div class="stats"><div class="stat"><b id="total"></b><span>Tested k-mers</span></div><div class="stat"><b id="sig"></b><span>Q-significant</span></div><div class="stat"><b id="pos"></b><span>Positive significant</span></div><div class="stat"><b id="neg"></b><span>Negative significant</span></div></div>
+<div class="plot"><canvas id="canvas"></canvas><div class="tip" id="tip"></div></div>
+<div class="help"><span class="legend"><span><i class="dot red"></i>Positive significant</span><span><i class="dot blue"></i>Negative significant</span><span><i class="dot gray"></i>Not significant</span></span>Scroll to zoom · drag to pan · double-click or Reset view to restore · hover for k-mer details. Y-axis is −log10(p-value); significance uses the selected Q-value cutoff.</div>
+</div><script>
+const raw=__POINT_DATA__;
+const points=raw.map(r=>({k:r[0],p:Math.max(r[1],Number.MIN_VALUE),x:r[2],q:r[3],y:-Math.log10(Math.max(r[1],Number.MIN_VALUE))}));
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d'),tip=document.getElementById('tip'),cutoffEl=document.getElementById('cutoff'),searchEl=document.getElementById('search'),searchResult=document.getElementById('searchResult');
+const pad={l:72,r:24,t:24,b:58};let screenX=new Float32Array(points.length),screenY=new Float32Array(points.length),drag=null,hoverFrame=0,selected=-1;
+const fullX=Math.max(1,points.reduce((m,p)=>Math.max(m,Math.abs(p.x)),0)),fullY=Math.max(1.5,points.reduce((m,p)=>Math.max(m,p.y),0))*1.05;let view={xmin:-fullX,xmax:fullX,ymin:0,ymax:fullY};
+function cutoff(){const v=Number(cutoffEl.value);return Number.isFinite(v)?Math.min(1,Math.max(0,v)):0.05}
+function resize(){const dpr=devicePixelRatio||1,r=canvas.getBoundingClientRect();canvas.width=Math.round(r.width*dpr);canvas.height=Math.round(r.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
+function dims(){const r=canvas.getBoundingClientRect();return{w:r.width,h:r.height,pw:r.width-pad.l-pad.r,ph:r.height-pad.t-pad.b}}
+function sx(x,d){return pad.l+(x-view.xmin)/(view.xmax-view.xmin)*d.pw}function sy(y,d){return pad.t+d.ph-(y-view.ymin)/(view.ymax-view.ymin)*d.ph}
+function fmt(v){return v<0.001?v.toExponential(3):v.toFixed(5)}
+function draw(){const d=dims(),qcut=cutoff();ctx.clearRect(0,0,d.w,d.h);ctx.fillStyle='#fff';ctx.fillRect(0,0,d.w,d.h);ctx.font='12px system-ui';ctx.strokeStyle='#dce4e8';ctx.fillStyle='#52606d';ctx.lineWidth=1;
+for(let i=0;i<=5;i++){const y=view.ymin+(view.ymax-view.ymin)*i/5,Y=sy(y,d);ctx.beginPath();ctx.moveTo(pad.l,Y);ctx.lineTo(d.w-pad.r,Y);ctx.stroke();ctx.fillText(y.toFixed(2),8,Y+4)}
+for(let i=0;i<=6;i++){const x=view.xmin+(view.xmax-view.xmin)*i/6,X=sx(x,d);ctx.beginPath();ctx.moveTo(X,pad.t);ctx.lineTo(X,d.h-pad.b);ctx.stroke();ctx.textAlign='center';ctx.fillText(x.toFixed(2),X,d.h-pad.b+20)}ctx.textAlign='start';
+const lineY=sy(-Math.log10(.05),d);if(lineY>=pad.t&&lineY<=d.h-pad.b){ctx.strokeStyle='#ef6c00';ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(pad.l,lineY);ctx.lineTo(d.w-pad.r,lineY);ctx.stroke();ctx.setLineDash([])}
+let sig=0,pos=0,neg=0;for(let i=0;i<points.length;i++){const p=points[i],X=sx(p.x,d),Y=sy(p.y,d);screenX[i]=X;screenY[i]=Y;const s=p.q<=qcut;if(s){sig++;p.x>0?pos++:p.x<0&&neg++}if(X<pad.l||X>d.w-pad.r||Y<pad.t||Y>d.h-pad.b)continue;ctx.fillStyle=s?(p.x>0?'#d32f2f':p.x<0?'#1976d2':'#7b1fa2'):'#90a4ae';ctx.globalAlpha=s?.82:.42;ctx.fillRect(X-1.5,Y-1.5,3,3)}ctx.globalAlpha=1;
+if(selected>=0){const p=points[selected],X=screenX[selected],Y=screenY[selected];if(X>=pad.l&&X<=d.w-pad.r&&Y>=pad.t&&Y<=d.h-pad.b){ctx.strokeStyle='#ffb300';ctx.fillStyle='#fff8e1';ctx.lineWidth=3;ctx.beginPath();ctx.arc(X,Y,9,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.strokeStyle='#3e2723';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(X-13,Y);ctx.lineTo(X+13,Y);ctx.moveTo(X,Y-13);ctx.lineTo(X,Y+13);ctx.stroke();ctx.font='bold 13px system-ui';const tw=ctx.measureText(p.k).width;const lx=Math.min(d.w-pad.r-tw-12,Math.max(pad.l,X+12)),ly=Math.max(pad.t+19,Y-12);ctx.fillStyle='#fff8e1';ctx.strokeStyle='#ffb300';ctx.lineWidth=1;ctx.fillRect(lx,ly-17,tw+10,22);ctx.strokeRect(lx,ly-17,tw+10,22);ctx.fillStyle='#3e2723';ctx.textAlign='start';ctx.fillText(p.k,lx+5,ly)}}
+ctx.fillStyle='#263238';ctx.font='14px system-ui';ctx.textAlign='center';ctx.fillText('Mean rank difference',pad.l+d.pw/2,d.h-12);ctx.save();ctx.translate(17,pad.t+d.ph/2);ctx.rotate(-Math.PI/2);ctx.fillText('−log10(p-value)',0,0);ctx.restore();
+document.getElementById('total').textContent=points.length.toLocaleString();document.getElementById('sig').textContent=sig.toLocaleString();document.getElementById('pos').textContent=pos.toLocaleString();document.getElementById('neg').textContent=neg.toLocaleString()}
+function reset(){view={xmin:-fullX,xmax:fullX,ymin:0,ymax:fullY};tip.style.display='none';draw()}
+canvas.addEventListener('wheel',e=>{e.preventDefault();const d=dims(),r=canvas.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,fx=(mx-pad.l)/d.pw,fy=1-(my-pad.t)/d.ph,z=e.deltaY>0?1.18:.84,cx=view.xmin+fx*(view.xmax-view.xmin),cy=view.ymin+fy*(view.ymax-view.ymin),nw=(view.xmax-view.xmin)*z,nh=(view.ymax-view.ymin)*z;view={xmin:cx-fx*nw,xmax:cx+(1-fx)*nw,ymin:Math.max(0,cy-fy*nh),ymax:Math.max(0,cy-fy*nh)+nh};draw()},{passive:false});
+canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,v:{...view}};canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointermove',e=>{if(drag){const d=dims(),dx=(e.clientX-drag.x)/d.pw*(drag.v.xmax-drag.v.xmin),dy=(e.clientY-drag.y)/d.ph*(drag.v.ymax-drag.v.ymin);view={xmin:drag.v.xmin-dx,xmax:drag.v.xmax-dx,ymin:Math.max(0,drag.v.ymin+dy),ymax:Math.max(0,drag.v.ymin+dy)+(drag.v.ymax-drag.v.ymin)};draw();return}cancelAnimationFrame(hoverFrame);hoverFrame=requestAnimationFrame(()=>showTip(e))});canvas.addEventListener('pointerup',()=>drag=null);canvas.addEventListener('pointercancel',()=>drag=null);canvas.addEventListener('dblclick',reset);
+function showTip(e){const r=canvas.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=-1,dist=64;for(let i=0;i<points.length;i++){const dx=screenX[i]-x,dy=screenY[i]-y,dd=dx*dx+dy*dy;if(dd<dist){dist=dd;best=i}}if(best<0){tip.style.display='none';return}const p=points[best];tip.innerHTML=`<b>${p.k}</b><br>p-value: ${fmt(p.p)}<br>Q value: ${fmt(p.q)}<br>Mean rank difference: ${p.x.toFixed(4)}`;tip.style.display='block';tip.style.left=Math.min(r.width-190,x+14)+'px';tip.style.top=Math.max(8,y-72)+'px'}
+function locateKmer(allowPartial=false){const key=searchEl.value.trim().toUpperCase();searchResult.classList.remove('error');if(!key){selected=-1;searchResult.textContent='Enter a complete k-mer to locate and mark it.';draw();return}let matches=[];for(let i=0;i<points.length;i++){if(points[i].k===key||(allowPartial&&points[i].k.includes(key)))matches.push(i)}if(matches.length!==1){selected=-1;searchResult.classList.add('error');searchResult.textContent=matches.length?`${matches.length.toLocaleString()} partial matches. Enter the complete k-mer.`:`No tested k-mer matches “${key}”.`;draw();return}selected=matches[0];const p=points[selected],xr=Math.max(.15,fullX*.08),yr=Math.max(.2,fullY*.08),bottom=Math.max(0,p.y-yr);view={xmin:p.x-xr,xmax:p.x+xr,ymin:bottom,ymax:bottom+2*yr};searchResult.textContent=`Located ${p.k} — p=${fmt(p.p)}, Q=${fmt(p.q)}, mean rank difference=${p.x.toFixed(4)}`;draw()}
+searchEl.addEventListener('input',()=>{const key=searchEl.value.trim().toUpperCase();if(points.some(p=>p.k===key))locateKmer();else{selected=-1;searchResult.classList.remove('error');searchResult.textContent=key?'Keep typing, then press Enter or Find k-mer.':'Enter a complete k-mer to locate and mark it.';draw()}});searchEl.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();locateKmer(true)}});document.getElementById('find').addEventListener('click',()=>locateKmer(true));cutoffEl.addEventListener('input',draw);document.getElementById('reset').addEventListener('click',reset);new ResizeObserver(resize).observe(canvas.parentElement);resize();
+</script></body></html>""".replace("__POINT_DATA__", point_data)
+    output_path.write_text(html, encoding="utf-8")
+
+
 def run_mannwhitney(
     positive: CohortTilingResult,
     negative: CohortTilingResult,
@@ -381,15 +464,20 @@ def run_mannwhitney(
     matrix_file: Path,
     positive_label: str = "AD",
     negative_label: str = "NC",
+    tested_kmers: Sequence[str] | None = None,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> MannWhitneyResult:
     """Test the union of passing k-mers using normalized filtered values.
 
     The directional AD/NC files apply significance cutoff to raw p-value.
     """
-    tested_kmers = sorted(positive.passed_kmers | negative.passed_kmers)
+    tested_kmers = list(
+        tested_kmers
+        if tested_kmers is not None
+        else sorted(positive.passed_kmers | negative.passed_kmers)
+    )
     if not tested_kmers:
-        raise ValueError("No k-mers passed chi-square filtering in either cohort.")
+        raise ValueError("No k-mers remain for Mann-Whitney testing.")
 
     positive_patients = positive.active_patients
     negative_patients = negative.active_patients
@@ -447,12 +535,14 @@ def run_mannwhitney(
     ).sort_values("p_value")
 
     result_file = output_prefix.with_suffix(".csv")
+    volcano_file = output_prefix.with_name(f"{output_prefix.stem}_volcano.html")
     positive_file_label = _group_label_for_filename(positive_label, "positive")
     negative_file_label = _group_label_for_filename(negative_label, "negative")
     ad_file = output_prefix.with_name(f"{output_prefix.stem}_{positive_file_label}.csv")
     nc_file = output_prefix.with_name(f"{output_prefix.stem}_{negative_file_label}.csv")
 
     result_df.to_csv(result_file, index=False)
+    _write_volcano_plot(result_df, volcano_file)
     result_df[result_df["mean_rank_diff"] > 0].to_csv(ad_file, index=False)
     result_df[result_df["mean_rank_diff"] < 0].to_csv(nc_file, index=False)
 
@@ -465,6 +555,7 @@ def run_mannwhitney(
         ad_file=ad_file,
         nc_file=nc_file,
         matrix_file=matrix_file,
+        volcano_file=volcano_file,
     )
 
 
@@ -475,6 +566,7 @@ def analyze_single_k(
     k: int,
     wildcard_positions: Sequence[int] | None = None,
     normalize: bool = True,
+    max_zero_percentage: float = 100.0,
     workdir: Optional[Path] = None,
     positive_label: str = "AD",
     negative_label: str = "NC",
@@ -488,6 +580,8 @@ def analyze_single_k(
     workdir.mkdir(parents=True, exist_ok=True)
 
     wildcard_positions = list(wildcard_positions or [])
+    if not 0 <= max_zero_percentage <= 100:
+        raise ValueError("max_zero_percentage must be between 0 and 100.")
 
     if progress_callback:
         progress_callback(10, "Tiling positive cohort")
@@ -526,6 +620,18 @@ def analyze_single_k(
         normalization_totals={**positive.totals, **negative.totals},
     )
 
+    # Keep the saved matrix intact. Apply the zero-rate cutoff only to the
+    # k-mers passed into Mann-Whitney and written to its result CSV files.
+    output_kmers = _filter_kmers_by_zero_percentage(
+        matrix,
+        tested_kmers,
+        max_zero_percentage,
+    )
+    if not output_kmers:
+        raise ValueError(
+            "No k-mers remain after applying the maximum zero-percentage cutoff."
+        )
+
     output_prefix = workdir / _with_optional_suffix(input_path.stem, "U_test", f"{k}mers", wildcard_label)
     if progress_callback:
         progress_callback(60, "Running Mann-Whitney tests")
@@ -537,6 +643,7 @@ def analyze_single_k(
         matrix_file=matrix_file,
         positive_label=positive_label,
         negative_label=negative_label,
+        tested_kmers=output_kmers,
         progress_callback=progress_callback,
     )
 
@@ -552,6 +659,7 @@ def analyze_groups(
     k_values: Iterable[int],
     wildcard_positions: Sequence[int] | None = None,
     normalize: bool = True,
+    max_zero_percentage: float = 100.0,
     workdir: Optional[Path] = None,
 ) -> List[MannWhitneyResult]:
     """Run analysis for multiple k values."""
@@ -570,6 +678,7 @@ def analyze_groups(
                 k=k,
                 wildcard_positions=wildcard_positions,
                 normalize=normalize,
+                max_zero_percentage=max_zero_percentage,
                 workdir=workdir,
             )
         )
