@@ -176,6 +176,32 @@ export function KmerAnalysisPage() {
       return;
     }
 
+    const wildcardTokens = wildcards
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean);
+    if (wildcardTokens.some((token) => !/^\d+$/.test(token))) {
+      setError("Wildcard positions must be comma-separated integers.");
+      return;
+    }
+    const wildcardValues = wildcardTokens.map(Number);
+    if (new Set(wildcardValues).size !== wildcardValues.length) {
+      setError("Wildcard positions must be unique.");
+      return;
+    }
+    if (wildcardValues.some((position) => position < 0 || position >= parsedK)) {
+      setError(`Wildcard positions must be between 0 and ${parsedK - 1}.`);
+      return;
+    }
+    const combinationCount = 20 ** (parsedK - wildcardValues.length);
+    if (combinationCount > 1_000_000) {
+      setError(
+        `This configuration requires ${combinationCount.toLocaleString()} prebuilt k-mers. ` +
+          "Reduce k or add wildcard positions to stay at or below 1,000,000.",
+      );
+      return;
+    }
+
     const formData = new FormData();
     formData.append("input_mode", inputMode);
     if (inputMode === "merged" && dataFile) {
@@ -268,7 +294,7 @@ export function KmerAnalysisPage() {
     <div className="page-grid">
       <SectionCard
         title="K-mer enrichment analysis"
-        description="Split cohorts, tile peptides, and run Mann–Whitney U tests for one k-mer size at a time."
+        description="Build the complete k-mer universe, apply product-based chi-square filtering to each sample, and run Mann–Whitney U tests."
       >
         <form className="form-grid" onSubmit={handleSubmit}>
           <fieldset className="form-field input-mode-group">
@@ -396,7 +422,7 @@ export function KmerAnalysisPage() {
               value={wildcards}
               onChange={(event) => setWildcards(event.target.value)}
             />
-            <small>Leave empty for strict kmers. Use comma separated zero-index positions.</small>
+            <small>Leave empty for strict k-mers. Use unique, comma-separated, zero-indexed positions.</small>
           </label>
 
           <label className="form-field form-checkbox">
@@ -405,7 +431,8 @@ export function KmerAnalysisPage() {
               checked={normalize}
               onChange={(event) => setNormalize(event.target.checked)}
             />
-            <span>Normalize counts to proportions before statistical testing</span>
+            <span>Normalize the matrix and statistical values to proportions</span>
+            <small>Uses each sample's pre-filter tiled total. Turn this off to keep raw filtered counts.</small>
           </label>
 
           <div className="form-actions">

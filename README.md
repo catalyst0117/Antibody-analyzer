@@ -15,6 +15,7 @@ Antibody Analyzer is a full-stack web app for antibody sequencing workflows. It 
 - Session-level UI persistence for recent form state and latest results when switching sections
 - Friendly download naming for generated archives
 - Vercel-compatible Python entrypoint at `api/main.py`
+- [Matrix comparison utility](#matrix-comparison-utility)
 
 ## Project structure
 
@@ -98,6 +99,10 @@ Inputs:
 Behavior:
 - runs as a background task
 - progress is exposed through the API and shown in the React UI
+- builds the complete k-mer universe and applies product-based chi-square
+  filtering independently to each sample
+- always uses pre-filter sample totals for normalized Mann-Whitney inputs
+- optionally writes the downloadable matrix as raw counts or normalized values
 - generated U-test positive/negative files can be handed directly to Proteome Mapping
 - preserves latest visible state when navigating away and back in the same browser session
 
@@ -152,6 +157,31 @@ Outputs:
 - `GET /api/results/{result_id}/download`
   Downloads the stored ZIP bundle for a completed run.
 
+## Matrix comparison utility
+
+The comparator accepts `.csv` and `.xlsx` matrices in any combination. For Excel
+files, it reads the active worksheet and uses calculated cell values. Pass the
+approved or legacy matrix first and the newly generated matrix second:
+
+```bash
+python3 -m tests.matrix_compare \
+  path/to/expected_matrix.csv \
+  path/to/generated_matrix.xlsx \
+  --output-dir test-artifacts/module2-matrix
+```
+
+The command checks rows and sample columns by name, compares numeric values with a
+small floating-point tolerance, and writes:
+
+- `test-artifacts/module2-matrix/matrix_diff.csv`: `actual - expected` for every
+  shared cell
+- `test-artifacts/module2-matrix/matrix_diff.html`: a visual heatmap where blue is
+  lower, red is higher, and gray marks missing rows or columns
+
+Open `matrix_diff.html` in a browser to inspect the largest differences. The command
+exits with status `0` when the matrices match and `1` when they differ, so status
+`1` means the report was generated successfully but differences were found.
+
 ## Deployment notes
 
 - The frontend is a Vite app and can be deployed separately or alongside the backend.
@@ -160,7 +190,7 @@ Outputs:
 
 ## Verification
 
-The repository does not currently include a formal automated test suite. Recommended checks:
+Recommended application checks:
 
 ```bash
 cd frontend

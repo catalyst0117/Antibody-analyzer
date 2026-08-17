@@ -7,3 +7,7 @@ frontend/dist/
 frontend/.env
 .DS_Store
 /src
+test-artifacts/
+/tests/*
+!/tests/__init__.py
+!/tests/matrix_compare.py

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -11,6 +12,7 @@ from scipy.stats import mannwhitneyu, rankdata
 from statsmodels.stats.multitest import multipletests
 from tqdm import tqdm
 
+CANONICAL_AA = "ACDEFGHIKLMNPQRSTVWY"
 AA_BACKGROUND = {
     "X": 0.0,
     "S": 0.08621733200464735,
@@ -36,6 +38,7 @@ AA_BACKGROUND = {
 }
 
 CHI_SQUARE_THRESHOLD = 3.841
+DEFAULT_MAX_COMBINATIONS = 1_000_000
 
 
 @dataclass
@@ -48,6 +51,16 @@ class MannWhitneyResult:
     ad_file: Path
     nc_file: Path
     matrix_file: Path
+
+
+@dataclass(frozen=True)
+class CohortTilingResult:
+    """Per-cohort counts needed for both matrix output and statistical testing."""
+    raw_filtered_counts: Dict[str, Dict[str, int]]
+    passed_kmers: set[str]
+    active_patients: list[str]
+    universe: Tuple[str, ...]
+    totals: Dict[str, int]
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -64,21 +77,85 @@ def _with_optional_suffix(base: str, *suffixes: str) -> str:
     return "_".join(parts)
 
 
-def split_input_by_group(input_path: Path, positive_keyword: str = "AD", negative_keyword: str = "NC") -> Tuple[Path, Path]:
-    if input_path.suffix == ".xlsx":
+def prebuild_kmers(
+    kmer_length: int,
+    wildcard_positions: Sequence[int] | None = None,
+    alphabet: str = CANONICAL_AA,
+    max_combinations: int = DEFAULT_MAX_COMBINATIONS,
+) -> Tuple[str, ...]:
+    """Return every ordered k-mer combination, fixing wildcard positions to X."""
+    if kmer_length <= 0:
+        raise ValueError("kmer_length must be positive.")
+    if not alphabet or len(set(alphabet)) != len(alphabet):
+        raise ValueError("alphabet must contain unique amino-acid symbols.")
+
+    wildcard_set = set(wildcard_positions or [])
+    invalid = sorted(position for position in wildcard_set if not 0 <= position < kmer_length)
+    if invalid:
+        raise ValueError(f"Wildcard positions outside the k-mer: {invalid}")
+
+    variable_count = kmer_length - len(wildcard_set)
+    combination_count = len(alphabet) ** variable_count
+    if combination_count > max_combinations:
+        raise ValueError(
+            f"Prebuilding {combination_count:,} k-mers exceeds the configured limit "
+            f"of {max_combinations:,}. Reduce k, add wildcards, or explicitly raise "
+            "max_combinations if enough memory is available."
+        )
+
+    kmers = []
+    for residues in product(alphabet, repeat=variable_count):
+        residue_iterator = iter(residues)
+        kmer = [
+            "X" if position in wildcard_set else next(residue_iterator)
+            for position in range(kmer_length)
+        ]
+        kmers.append("".join(kmer))
+    return tuple(kmers)
+
+
+def calculate_expected_frequency(
+    kmer: str,
+    total_count: int,
+    aa_background: Dict[str, float] = AA_BACKGROUND,
+) -> float:
+    """Calculate E = T * product(p(aa)), ignoring generated X wildcards."""
+    expected = float(total_count)
+    for amino_acid in kmer:
+        if amino_acid == "X":
+            continue
+        frequency = aa_background.get(amino_acid)
+        if frequency is None:
+            return 0.0
+        expected *= frequency
+    return expected
+
+
+def split_input_by_group(
+    input_path: Path,
+    positive_keyword: str = "AD",
+    negative_keyword: str = "NC"
+) -> Tuple[Path, Path]:
+    """Split paired sequence-count columns into cohort files based on keywords.
+
+    Matches columns starting with positive_keyword and negative_keyword.
+    """
+    input_path = Path(input_path)
+    suffix = input_path.suffix.lower()
+    if suffix == ".xlsx":
         df = pd.read_excel(input_path)
-    elif input_path.suffix == ".csv":
+    elif suffix == ".csv":
         df = pd.read_csv(input_path)
     else:
-        raise ValueError("Unsupported file format.")
+        raise ValueError("Unsupported file format; use .csv or .xlsx.")
 
     positive_keyword = positive_keyword.strip()
     negative_keyword = negative_keyword.strip()
     if not positive_keyword or not negative_keyword:
         raise ValueError("Positive and negative keywords are required.")
 
-    pos_cols: List[str] = []
-    neg_cols: List[str] = []
+    positive_columns = []
+    negative_columns = []
 
     def matches_keyword(header: str, keyword: str) -> bool:
         return header.lower().startswith(keyword.lower())
@@ -90,21 +167,21 @@ def split_input_by_group(input_path: Path, positive_keyword: str = "AD", negativ
             i += 1
             continue
         if matches_keyword(header, positive_keyword):
-            pos_cols.extend(df.columns[i : i + 2])
+            positive_columns.extend(df.columns[i : i + 2])
             i += 2
         elif matches_keyword(header, negative_keyword):
-            neg_cols.extend(df.columns[i : i + 2])
+            negative_columns.extend(df.columns[i : i + 2])
             i += 2
         else:
             i += 1
 
-    if not pos_cols:
+    if not positive_columns:
         raise ValueError(f"No columns matched the positive keyword '{positive_keyword}'.")
-    if not neg_cols:
+    if not negative_columns:
         raise ValueError(f"No columns matched the negative keyword '{negative_keyword}'.")
 
-    df_pos = df[pos_cols].copy()
-    df_neg = df[neg_cols].copy()
+    df_pos = df[positive_columns].copy()
+    df_neg = df[negative_columns].copy()
 
     for subset in (df_pos, df_neg):
         for idx in range(1, subset.shape[1], 2):
@@ -115,7 +192,7 @@ def split_input_by_group(input_path: Path, positive_keyword: str = "AD", negativ
     output_pos = input_path.parent / f"{input_path.stem}_{pos_label}{input_path.suffix}"
     output_neg = input_path.parent / f"{input_path.stem}_{neg_label}{input_path.suffix}"
 
-    if input_path.suffix == ".xlsx":
+    if suffix == ".xlsx":
         df_pos.to_excel(output_pos, index=False)
         df_neg.to_excel(output_neg, index=False)
     else:
@@ -126,157 +203,245 @@ def split_input_by_group(input_path: Path, positive_keyword: str = "AD", negativ
 
 
 def apply_chi_square_filter(
-    kmer_dict: Dict[str, int],
-    aa_background: Dict[str, float],
+    raw_counts: Dict[str, int],
+    universe: Iterable[str],
+    total_count: int,
+    aa_background: Dict[str, float] = AA_BACKGROUND,
     threshold: float = CHI_SQUARE_THRESHOLD,
-    normalize_expected: bool = True,
-) -> Dict[str, int]:
-    filtered: Dict[str, int] = {}
-    total_count = sum(kmer_dict.values())
-    if total_count == 0:
-        return filtered
+) -> Tuple[Dict[str, int], set[str]]:
+    """Apply per-patient chi-square calculation.
 
-    for kmer, observed in kmer_dict.items():
-        expected = 0.0
-        for aa in kmer:
-            expected += aa_background.get(aa, 0.0) * total_count
-        if normalize_expected and kmer_dict:
-            expected /= len(kmer_dict)
-        if expected == 0:
+    Every universe row is evaluated. Passing zero rows are included in
+    ``passed_kmers`` but sparse output omits zeros (matrix restores them).
+    """
+    filtered_raw: Dict[str, int] = {}
+    passed_kmers: set[str] = set()
+    if total_count <= 0:
+        return filtered_raw, passed_kmers
+
+    for kmer in universe:
+        observed = raw_counts.get(kmer, 0)
+        expected = calculate_expected_frequency(kmer, total_count, aa_background)
+        if expected <= 0:
             continue
-        chi2 = (observed - expected) ** 2 / expected
-        if chi2 >= threshold:
-            filtered[kmer] = observed
-    return filtered
+        chi_square = (observed - expected) ** 2 / expected
+        if chi_square > threshold:
+            passed_kmers.add(kmer)
+            if observed:
+                filtered_raw[kmer] = observed
+    return filtered_raw, passed_kmers
+
+
+def _read_table(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        return pd.read_excel(path)
+    if suffix == ".csv":
+        return pd.read_csv(path)
+    raise ValueError("Unsupported file format; use .csv or .xlsx.")
+
+
+def _legacy_patient_name(column_name: object) -> str:
+    """Match the shortened patient identifiers from column names."""
+    stem = Path(str(column_name)).stem
+    parts = stem.split("_")
+    return "_".join(parts[:2]) if len(parts) > 1 else stem
+
+
+def _iter_patient_raw_counts(
+    path: Path,
+    kmer_length: int,
+    wildcard_positions: Sequence[int],
+    universe_set: set[str],
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Iterable[Tuple[str, Dict[str, int], int]]:
+    """Tile samples while counting windows correctly."""
+    data = _read_table(path)
+    if data.shape[1] % 2:
+        raise ValueError("Input must contain sequence/count column pairs.")
+
+    patient_names: set[str] = set()
+    total_patients = data.shape[1] // 2
+    for col_idx, column in enumerate(range(0, data.shape[1], 2)):
+        sequence_column = data.columns[column]
+        count_column = data.columns[column + 1]
+        patient = _legacy_patient_name(sequence_column)
+        if patient in patient_names:
+            raise ValueError(
+                f"Multiple sample columns resolve to patient name {patient!r}. "
+                "Remove longitudinal duplicates before running analysis."
+            )
+        patient_names.add(patient)
+        counts: Dict[str, int] = defaultdict(int)
+        total = 0
+
+        for sequence, count in zip(data[sequence_column], data[count_column]):
+            if pd.isna(sequence) or pd.isna(count) or not isinstance(sequence, str):
+                continue
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                continue
+
+            window_count = max(0, len(sequence) - kmer_length + 1)
+            total += window_count * count
+            for start in range(window_count):
+                kmer = list(sequence[start : start + kmer_length])
+                for position in wildcard_positions:
+                    kmer[position] = "X"
+                kmer_string = "".join(kmer)
+                if kmer_string in universe_set:
+                    counts[kmer_string] += count
+
+        if progress_callback:
+            progress_callback(15 + int((col_idx / total_patients) * 15), f"Tiling patients ({col_idx + 1}/{total_patients})")
+
+        yield patient, dict(counts), total
 
 
 def tile_patient_file(
     path: Path,
-    kmer_length: int,
+    kmer_length: int = 4,
     wildcard_positions: Sequence[int] | None = None,
-    apply_chi_square: bool = True,
-    aa_background: Optional[Dict[str, float]] = None,
-    normalize_expected: bool = True,
-) -> Tuple[Dict[str, Dict[str, int]], set[str]]:
-    wildcard_positions = list(wildcard_positions or [])
-    if path.suffix == ".xlsx":
-        df = pd.read_excel(path)
-    elif path.suffix == ".csv":
-        df = pd.read_csv(path)
-    else:
-        raise ValueError("Unsupported file format.")
+    aa_background: Dict[str, float] = AA_BACKGROUND,
+    chi_square_threshold: float = CHI_SQUARE_THRESHOLD,
+    alphabet: str = CANONICAL_AA,
+    max_combinations: int = DEFAULT_MAX_COMBINATIONS,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> CohortTilingResult:
+    """Tile and product-filter every sample independently."""
+    path = Path(path)
+    wildcard_positions = sorted(set(wildcard_positions or []))
+    universe = prebuild_kmers(
+        kmer_length,
+        wildcard_positions=wildcard_positions,
+        alphabet=alphabet,
+        max_combinations=max_combinations,
+    )
+    raw_filtered_counts: Dict[str, Dict[str, int]] = {}
+    active_patients: list[str] = []
+    totals: Dict[str, int] = {}
+    passed_kmers: set[str] = set()
 
-    patient_dicts: Dict[str, Dict[str, int]] = {}
-    total_kmer_dict: Dict[str, int] = defaultdict(int)
-
-    for col in range(0, df.shape[1], 2):
-        seq_col = df.columns[col]
-        count_col = df.columns[col + 1]
-        patient_name = str(seq_col)
-        patient_dict: Dict[str, int] = defaultdict(int)
-
-        for seq, count in zip(df[seq_col], df[count_col]):
-            if pd.isna(seq) or pd.isna(count):
-                continue
-            if not isinstance(seq, str):
-                continue
-            try:
-                count = int(count)
-            except Exception:
-                continue
-
-            for i in range(len(seq) - kmer_length + 1):
-                kmer = list(seq[i : i + kmer_length])
-                for pos in wildcard_positions:
-                    if 0 <= pos < len(kmer):
-                        kmer[pos] = "X"
-                kmer_str = "".join(kmer)
-                patient_dict[kmer_str] += count
-                total_kmer_dict[kmer_str] += count
-
-        patient_dicts[patient_name] = dict(patient_dict)
-
-    filtered_dict = dict(total_kmer_dict)
-    if apply_chi_square:
-        if aa_background is None:
-            aa_background = AA_BACKGROUND
-        filtered_dict = apply_chi_square_filter(
-            filtered_dict,
+    for patient, counts, total in _iter_patient_raw_counts(
+        path,
+        kmer_length,
+        wildcard_positions,
+        set(universe),
+        progress_callback=progress_callback,
+    ):
+        filtered_raw, patient_passed = apply_chi_square_filter(
+            counts,
+            universe,
+            total,
             aa_background=aa_background,
-            threshold=CHI_SQUARE_THRESHOLD,
-            normalize_expected=normalize_expected,
+            threshold=chi_square_threshold,
         )
+        raw_filtered_counts[patient] = filtered_raw
+        totals[patient] = total
+        if patient_passed:
+            active_patients.append(patient)
+        passed_kmers.update(patient_passed)
 
-    return patient_dicts, set(filtered_dict.keys())
+    return CohortTilingResult(
+        raw_filtered_counts=raw_filtered_counts,
+        passed_kmers=passed_kmers,
+        active_patients=active_patients,
+        universe=universe,
+        totals=totals,
+    )
 
 
 def build_kmer_matrix(
-    patient_dicts: Dict[str, Dict[str, int]],
-    kmers_filter: Optional[Iterable[str]] = None,
-    normalize: bool = True,
+    patient_counts: Dict[str, Dict[str, int | float]],
+    kmers: Iterable[str],
+    output_path: Path | None = None,
+    normalize: bool = False,
+    normalization_totals: Dict[str, int] | None = None,
 ) -> pd.DataFrame:
-    kmers = set()
-    for data in patient_dicts.values():
-        kmers.update(data.keys())
-    if kmers_filter is not None:
-        kmers &= set(kmers_filter)
-    kmers = sorted(kmers)
-
-    matrix = pd.DataFrame(index=kmers)
-    for patient, counts in patient_dicts.items():
-        series = pd.Series(counts, dtype=float)
-        if normalize:
-            total = series.sum()
+    """Build a zero-filled matrix, optionally using pre-filter sample totals."""
+    index = pd.Index(tuple(kmers), name="kmer")
+    matrix = pd.DataFrame.from_dict(patient_counts).reindex(index).fillna(0.0)
+    if normalize:
+        if normalization_totals is None:
+            raise ValueError("normalization_totals are required when normalize=True.")
+        for patient in matrix.columns:
+            total = normalization_totals.get(str(patient), 0)
             if total:
-                series = series / total
-        matrix[patient] = series
-    matrix.fillna(0.0, inplace=True)
+                matrix[patient] /= total
+    if output_path is not None:
+        matrix.to_csv(output_path)
     return matrix
 
 
 def run_mannwhitney(
-    matrix: pd.DataFrame,
-    pos_cols: Sequence[str],
-    neg_cols: Sequence[str],
+    positive: CohortTilingResult,
+    negative: CohortTilingResult,
     output_prefix: Path,
     matrix_file: Path,
     positive_label: str = "AD",
     negative_label: str = "NC",
-    progress_callback: Optional[Callable[[int, int], None]] = None,
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> MannWhitneyResult:
-    kmers = matrix.index
-    pvals: List[float] = []
-    mean_rank_diffs: List[float] = []
-    total_kmers = len(kmers)
+    """Test the union of passing k-mers using normalized filtered values.
 
-    for index, kmer in enumerate(tqdm(kmers, desc="Running Mann-Whitney U tests"), start=1):
-        pos_vals = matrix.loc[kmer, pos_cols].to_numpy()
-        neg_vals = matrix.loc[kmer, neg_cols].to_numpy()
+    The directional AD/NC files apply significance cutoff to raw p-value.
+    """
+    tested_kmers = sorted(positive.passed_kmers | negative.passed_kmers)
+    if not tested_kmers:
+        raise ValueError("No k-mers passed chi-square filtering in either cohort.")
 
-        combined = np.concatenate([pos_vals, neg_vals])
+    positive_patients = positive.active_patients
+    negative_patients = negative.active_patients
+    if not positive_patients or not negative_patients:
+        raise ValueError("Both cohorts need at least one patient with a passing k-mer.")
+
+    # Build matrices with raw filtered counts
+    positive_matrix = build_kmer_matrix(
+        {patient: positive.raw_filtered_counts[patient] for patient in positive_patients},
+        tested_kmers,
+    )
+    negative_matrix = build_kmer_matrix(
+        {patient: negative.raw_filtered_counts[patient] for patient in negative_patients},
+        tested_kmers,
+    )
+
+    # Normalize for Mann-Whitney testing
+    for patient in positive_patients:
+        positive_matrix[patient] /= positive.totals[patient]
+    for patient in negative_patients:
+        negative_matrix[patient] /= negative.totals[patient]
+
+    p_values = []
+    mean_rank_differences = []
+
+    for index, kmer in enumerate(tqdm(tested_kmers, desc="Running Mann-Whitney U tests"), start=1):
+        positive_values = positive_matrix.loc[kmer].to_numpy()
+        negative_values = negative_matrix.loc[kmer].to_numpy()
+
+        combined = np.concatenate([positive_values, negative_values])
         ranks = rankdata(combined)
-        rank_pos = ranks[: len(pos_vals)]
-        rank_neg = ranks[len(pos_vals) :]
-        mean_rank_diff = float(rank_pos.mean() - rank_neg.mean())
+        mean_rank_diff = float(ranks[: len(positive_values)].mean() - ranks[len(positive_values) :].mean())
 
         try:
-            _, p_value = mannwhitneyu(pos_vals, neg_vals, alternative="two-sided")
+            _, p_value = mannwhitneyu(positive_values, negative_values, alternative="two-sided")
         except ValueError:
             p_value = 1.0
 
-        pvals.append(p_value)
-        mean_rank_diffs.append(mean_rank_diff)
+        p_values.append(p_value)
+        mean_rank_differences.append(mean_rank_diff)
 
-        if progress_callback and (index == total_kmers or index % max(1, total_kmers // 20) == 0):
-            progress_callback(index, total_kmers)
+        total = len(tested_kmers)
+        if progress_callback and (index == total or index % max(1, total // 20) == 0):
+            progress_callback(60 + int((index / total) * 30), f"Running Mann-Whitney tests ({index}/{total})")
 
-    fdr = multipletests(pvals, method="fdr_tsbky")[1]
+    fdr = multipletests(p_values, method="fdr_tsbky")[1]
 
     result_df = pd.DataFrame(
         {
-            "kmer": kmers,
-            "p_value": pvals,
-            "mean_rank_diff": mean_rank_diffs,
+            "kmer": tested_kmers,
+            "p_value": p_values,
+            "mean_rank_diff": mean_rank_differences,
             "Q value": fdr,
         }
     ).sort_values("p_value")
@@ -292,7 +457,7 @@ def run_mannwhitney(
     result_df[result_df["mean_rank_diff"] < 0].to_csv(nc_file, index=False)
 
     return MannWhitneyResult(
-        k=len(kmers[0]) if not kmers.empty else 0,
+        k=len(tested_kmers[0]) if tested_kmers else 0,
         total_kmers=len(result_df),
         ad_elevated=int((result_df["mean_rank_diff"] > 0).sum()),
         nc_elevated=int((result_df["mean_rank_diff"] < 0).sum()),
@@ -315,6 +480,10 @@ def analyze_single_k(
     negative_label: str = "NC",
     progress_callback: Optional[ProgressCallback] = None,
 ) -> MannWhitneyResult:
+    """Analyze a single k value for both cohorts.
+
+    This is the main entry point for analysis.
+    """
     workdir = Path(workdir or input_path.parent)
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -322,53 +491,53 @@ def analyze_single_k(
 
     if progress_callback:
         progress_callback(10, "Tiling positive cohort")
-    pos_dicts, filtered_pos = tile_patient_file(
+    positive = tile_patient_file(
         pos_file,
         kmer_length=k,
         wildcard_positions=wildcard_positions,
+        progress_callback=progress_callback,
     )
 
     if progress_callback:
         progress_callback(30, "Tiling negative cohort")
-    neg_dicts, filtered_neg = tile_patient_file(
+    negative = tile_patient_file(
         neg_file,
         kmer_length=k,
         wildcard_positions=wildcard_positions,
+        progress_callback=progress_callback,
     )
-
-    filter_set = filtered_pos & filtered_neg if filtered_pos and filtered_neg else filtered_pos or filtered_neg
 
     if progress_callback:
         progress_callback(50, "Building k-mer matrix")
-    matrix = build_kmer_matrix({**pos_dicts, **neg_dicts}, kmers_filter=filter_set, normalize=normalize)
 
+    # Use union of passing kmers from both cohorts
+    tested_kmers = sorted(positive.passed_kmers | negative.passed_kmers)
+
+    # Build output matrix with all tested kmers
     wildcard_label = f"[{''.join(str(i) for i in wildcard_positions)}]" if wildcard_positions else ""
     matrix_file = workdir / f"{_with_optional_suffix(input_path.stem, 'matrix', f'{k}mers', wildcard_label)}.csv"
-    matrix.index.name = "kmer"
-    matrix.to_csv(matrix_file)
 
-    pos_cols = list(pos_dicts.keys())
-    neg_cols = list(neg_dicts.keys())
+    # Build and save the matrix
+    matrix = build_kmer_matrix(
+        {**positive.raw_filtered_counts, **negative.raw_filtered_counts},
+        tested_kmers,
+        output_path=matrix_file,
+        normalize=normalize,
+        normalization_totals={**positive.totals, **negative.totals},
+    )
 
     output_prefix = workdir / _with_optional_suffix(input_path.stem, "U_test", f"{k}mers", wildcard_label)
     if progress_callback:
         progress_callback(60, "Running Mann-Whitney tests")
+
     result = run_mannwhitney(
-        matrix,
-        pos_cols,
-        neg_cols,
+        positive,
+        negative,
         output_prefix=output_prefix,
         matrix_file=matrix_file,
         positive_label=positive_label,
         negative_label=negative_label,
-        progress_callback=(
-            lambda current, total: progress_callback(
-                60 + int((current / total) * 30),
-                f"Running Mann-Whitney tests ({current}/{total})",
-            )
-            if progress_callback and total
-            else None
-        ),
+        progress_callback=progress_callback,
     )
 
     if progress_callback:
@@ -385,6 +554,7 @@ def analyze_groups(
     normalize: bool = True,
     workdir: Optional[Path] = None,
 ) -> List[MannWhitneyResult]:
+    """Run analysis for multiple k values."""
     workdir = Path(workdir or input_path.parent)
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -406,13 +576,19 @@ def analyze_groups(
 
     return results
 
+
 __all__ = [
     "AA_BACKGROUND",
+    "CANONICAL_AA",
     "CHI_SQUARE_THRESHOLD",
+    "CohortTilingResult",
     "MannWhitneyResult",
     "analyze_groups",
     "analyze_single_k",
+    "apply_chi_square_filter",
     "build_kmer_matrix",
+    "calculate_expected_frequency",
+    "prebuild_kmers",
     "run_mannwhitney",
     "split_input_by_group",
     "tile_patient_file",
