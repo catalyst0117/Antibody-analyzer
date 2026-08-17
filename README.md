@@ -115,7 +115,7 @@ Outputs:
 - positive-elevated CSV
 - negative-elevated CSV
 - matrix CSV with the k-mer column included first
-- interactive volcano plot HTML with hover details, search, zoom, pan, and an
+- interactive volcano plot HTML with hover details, zoom, pan, and an
   adjustable Q-value cutoff
 - downloadable ZIP bundle
 
