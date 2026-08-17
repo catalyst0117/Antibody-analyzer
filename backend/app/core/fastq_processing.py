@@ -17,6 +17,11 @@ VALID_BASES = {"A", "T", "C", "G"}
 VALID_AA = set("ACDEFGHIKLMNPQRSTVWYX*")
 
 
+def _normalize_peptide(sequence: str) -> str:
+    """Reserve X for downstream wildcards by normalizing peptide residues only."""
+    return sequence.replace("*", "Q").replace("X", "Q")
+
+
 def _ensure_directory(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -64,12 +69,12 @@ class FastqProcessor:
                 match = self.pattern.search(line)
                 if not match:
                     if fastq_path.suffix == ".txt" and len(stripped) >= 12 and not (set(stripped) - VALID_AA):
-                        peptides.add(stripped.replace("*", "X"))
+                        peptides.add(_normalize_peptide(stripped))
                     continue
                 nt_seq = match.group(0)[10:]
                 if len(nt_seq) != 36 or set(nt_seq) - VALID_BASES:
                     continue
-                aa = str(Seq(nt_seq).translate()).replace("*", "X")
+                aa = _normalize_peptide(str(Seq(nt_seq).translate()))
                 if len(aa) >= 12:
                     peptides.add(aa)
         return peptides
@@ -132,7 +137,7 @@ class FastqProcessor:
                     seq = match.group(0)[10:]
                     if len(seq) != 36 or set(seq) - VALID_BASES:
                         continue
-                    aa = str(Seq(seq).translate()).replace("*", "X")
+                    aa = _normalize_peptide(str(Seq(seq).translate()))
                     if len(aa) < 12:
                         continue
                     if aa in background_set:
