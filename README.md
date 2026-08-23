@@ -1,12 +1,12 @@
 # Antibody Analyzer
 
-Antibody Analyzer is a full-stack web app for antibody sequencing workflows. It wraps the research modules in `src/` with a FastAPI backend and a React/Vite frontend so users can upload datasets, monitor run progress, and download reproducible result bundles from the browser.
+Antibody Analyzer is a full-stack web app for exact tetramer antibody sequencing workflows. It wraps the research modules in `src/` with a FastAPI backend and a React/Vite frontend so users can upload datasets, monitor run progress, and download reproducible result bundles from the browser.
 
 ## Current workflows
 
 - **FASTQ Processor**: upload one or more FASTQ or FASTQ.GZ files, optionally subtract one or more background files, and generate a ranked peptide matrix.
-- **K-mer Analysis**: upload either a merged cohort spreadsheet with configurable positive/negative keywords or already-separated positive and negative cohort files, run Mann-Whitney U testing for one k value, track progress in the UI, and download the generated CSV bundle.
-- **Proteome Mapping**: upload positive and negative significance files plus a local proteome FASTA, or open it from a completed K-mer Analysis run with the generated U-test files attached automatically.
+- **Tetramer Analysis**: upload either a merged cohort spreadsheet with configurable positive/negative keywords or already-separated positive and negative cohort files, run Mann-Whitney U testing on exact 4-mers, track progress in the UI, and download the generated CSV bundle.
+- **Proteome Mapping**: upload positive and negative tetramer significance files plus a local proteome FASTA, or open it from a completed Tetramer Analysis run with the generated U-test files attached automatically.
 
 ## Highlights
 
@@ -86,13 +86,13 @@ Outputs:
 - optional background dump
 - downloadable ZIP bundle from the UI
 
-### K-mer Analysis
+### Tetramer Analysis
 
 Inputs:
 - merged cohort spreadsheet with user-selected positive and negative column keywords
 - or already-separated positive and negative cohort files
-- single k value
-- optional wildcard positions
+- exact 4-mer sequences (fixed `k=4`)
+- wildcard-free matching
 - optional maximum percentage of zero-valued samples for statistical output
 - optional custom download bundle name
 - normalize-counts toggle
@@ -100,11 +100,11 @@ Inputs:
 Behavior:
 - runs as a background task
 - progress is exposed through the API and shown in the React UI
-- builds the complete k-mer universe and applies product-based chi-square
+- builds the complete tetramer universe and applies product-based chi-square
   filtering independently to each sample
 - always uses pre-filter sample totals for normalized Mann-Whitney inputs
 - optionally writes the downloadable matrix as raw counts or normalized values
-- can omit sparse k-mers from Mann-Whitney and result CSVs without changing the
+- can omit sparse tetramers from Mann-Whitney and result CSVs without changing the
   downloadable matrix
 - generated U-test positive/negative files can be handed directly to Proteome Mapping
 - preserves latest visible state when navigating away and back in the same browser session
@@ -114,7 +114,7 @@ Outputs:
 - Mann-Whitney summary CSV
 - positive-elevated CSV
 - negative-elevated CSV
-- matrix CSV with the k-mer column included first
+- matrix CSV with the tetramer column included first
 - interactive volcano plot HTML with hover details, zoom, pan, and an
   adjustable Q-value cutoff
 - downloadable ZIP bundle
@@ -127,12 +127,12 @@ Inputs:
 - proteome FASTA
 - optional output folder name
 - optional `top_n`
-- wildcard toggle
+- exact tetramer significance files; wildcard `X` patterns are rejected
 - `q_cutoff`
 
 Behavior:
 - uses local FASTA mapping only
-- can auto-attach positive and negative U-test CSVs from a completed K-mer Analysis run
+- can auto-attach positive and negative U-test CSVs from a completed Tetramer Analysis run
 - still allows users to manually replace any carried-over files
 - generates a default output folder name when none is supplied
 - keeps the latest result panel visible when revisiting the section in the same browser session
@@ -150,7 +150,7 @@ Outputs:
 - `POST /api/process-fastq`
   Processes FASTQ uploads and returns a `result_id` for bundle download.
 - `POST /api/analyze-kmers`
-  Starts a background k-mer task and returns a `task_id`.
+  Starts a background exact-tetramer task and returns a `task_id`; non-4-mer and wildcard requests are rejected.
 - `GET /api/analyze-kmers/{task_id}`
   Returns task status, progress, and final result when complete.
 - `POST /api/module3-map`
@@ -158,7 +158,7 @@ Outputs:
 - `GET /api/results/{result_id}`
   Returns stored result metadata.
 - `GET /api/results/{result_id}/files/{filename}`
-  Downloads one generated file from a stored result bundle, used by the K-mer to Proteome Mapping handoff.
+  Downloads one generated file from a stored result bundle, used by the Tetramer Analysis to Proteome Mapping handoff.
 - `GET /api/results/{result_id}/download`
   Downloads the stored ZIP bundle for a completed run.
 

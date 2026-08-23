@@ -9,6 +9,7 @@ from statsmodels.stats.multitest import multipletests
 
 # Threshold for Chi-square filtering
 CHI_SQUARE_THRESHOLD = 3.841
+TETRAMER_LENGTH = 4
 
 # Global background frequency distribution for amino acids
 AA_BACKGROUND = {
@@ -36,6 +37,11 @@ AA_BACKGROUND = {
 }
 
 
+def _normalize_peptide(sequence: str) -> str:
+    """Normalize unsupported source symbols before exact tetramer tiling."""
+    return sequence.replace('*', 'Q').replace('X', 'Q')
+
+
 def create_kmer_dict(custom_db_path: str, kmer_length: int, wild_cards=False, wild_cards_pattern=[]):
     '''
     Creates a temporary dictionary to act as a database using a file as well as a protein table to reference
@@ -49,8 +55,10 @@ def create_kmer_dict(custom_db_path: str, kmer_length: int, wild_cards=False, wi
     protein_table: A 2d array representing each protein in the custom proteom table. metadata [proteinID,header,len(sequence)]
     seq_dict: A dictionary of key = kmerString and value is a list of tuples in format (proteinId, positionOfKmer)
     '''
-    if kmer_length < 4 or kmer_length > 8:
-        raise ValueError("Size must be between 4 and 8.")
+    if kmer_length != TETRAMER_LENGTH:
+        raise ValueError("Only exact tetramers (k=4) are supported.")
+    if wild_cards or wild_cards_pattern:
+        raise ValueError("Wildcards are not supported.")
 
     seq_dict = collections.defaultdict(list)
     protein_table = []
@@ -110,7 +118,7 @@ def create_kmer_dict(custom_db_path: str, kmer_length: int, wild_cards=False, wi
                     header = line
                     sequence = ''
                 else:
-                    sequence += line.replace('X', 'Q')  # Build the sequence string
+                    sequence += _normalize_peptide(line)
 
             if sequence:  # Don't forget to process the last sequence in the file
                 protein_table.append([protein_id, header, len(sequence)])
@@ -123,10 +131,10 @@ def split_input_by_group(input_path: Path):
     """
     Splits a single Excel/CSV file containing mixed AD_ and NC_ columns into two separate files:
     one for AD (Diseased) and one for NC (Normal Control).
-    
+
     Parameters:
     - input_path: Path to the original .csv or .xlsx file
-    
+
     Output:
     - Two files are saved with suffixes `_AD` and `_NC` respectively, preserving the original extension.
     """
@@ -231,6 +239,10 @@ def tile_patient_file(path,
                       aa_background=AA_BACKGROUND, 
                       chi_square_threshold=3.841, 
                       normalize_expected=True):
+    if kmer_length != TETRAMER_LENGTH:
+        raise ValueError("Only exact tetramers (k=4) are supported.")
+    if wildcard_positions:
+        raise ValueError("Wildcard positions are not supported.")
     if path.suffix == '.xlsx':
         df = pd.read_excel(path)
     elif path.suffix == '.csv':
@@ -372,7 +384,7 @@ def run_mannwhitney(matrix, pos_cols, neg_cols, output_filename="mannwhitney_res
         "kmer": kmers,
         "p_value": pvals,
         "mean_rank_diff": mean_rank_diffs,
-        "fdr_corrected_p": fdr_adjusted_pvals
+        "Q value": fdr_adjusted_pvals
     })
 
     result_df.sort_values("p_value", inplace=True)
@@ -395,7 +407,7 @@ def run_mannwhitney(matrix, pos_cols, neg_cols, output_filename="mannwhitney_res
     return result_df
 
 # Step 4: Wrapper function for end-to-end analysis from file intake to U-test
-def analyze_groups(input_path, pos_file, neg_file, k=7, wildcard_positions=[], normalize=True):
+def analyze_groups(input_path, pos_file, neg_file, k=4, wildcard_positions=[], normalize=True):
     """
     Top-level function:
     1. Tiles and processes patient data from positive and negative Excel/CSV files
@@ -403,6 +415,11 @@ def analyze_groups(input_path, pos_file, neg_file, k=7, wildcard_positions=[], n
     3. Runs Mann–Whitney U test to compare frequencies between groups
     4. Outputs a ranked CSV of p-values and effect sizes
     """
+    if k != TETRAMER_LENGTH:
+        raise ValueError("Only exact tetramers (k=4) are supported.")
+    if wildcard_positions:
+        raise ValueError("Wildcard positions are not supported.")
+
     base_stem = Path(input_path).stem
     wildcard_str = ''.join(str(i) for i in wildcard_positions)
     
@@ -428,7 +445,7 @@ def analyze_groups(input_path, pos_file, neg_file, k=7, wildcard_positions=[], n
 
 if __name__ ==  "__main__":
     #tile_patient_file(Path("/Users/ciao/Downloads/SI_file1NC.xlsx"), 5, [1, 3, 5])
-    input_path = Path("/Users/ciao/Desktop/module2_test_FDR/SI_file1.csv")
+    input_path = Path("/Users/ciao/Desktop/module2_test_FDR/data_comparison/SI_File1_Raw_12mers.csv")
     pos_file, neg_file = split_input_by_group(input_path)
-    for i in range(4, 8):
-        analyze_groups(input_path, pos_file, neg_file, k=i, wildcard_positions=[], normalize=True)
+
+    analyze_groups(input_path, pos_file, neg_file, k=4, wildcard_positions=[], normalize=False)

@@ -26,7 +26,6 @@ type ProteomeMappingSessionState = {
   outputFolderName: string;
   topNValue: string;
   qCutoffValue: string;
-  wildcards: boolean;
   result: Module3Response | null;
 };
 
@@ -58,7 +57,6 @@ export function Module3MappingPage() {
   const [outputFolderName, setOutputFolderName] = useState(savedState?.outputFolderName ?? "");
   const [topNValue, setTopNValue] = useState(savedState?.topNValue ?? "");
   const [qCutoffValue, setQCutoffValue] = useState(savedState?.qCutoffValue ?? "0.01");
-  const [wildcards, setWildcards] = useState(savedState?.wildcards ?? false);
   const [result, setResult] = useState<Module3Response | null>(savedState?.result ?? null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
 
@@ -80,11 +78,10 @@ export function Module3MappingPage() {
       proteomeFileName,
       topNValue,
       qCutoffValue,
-      wildcards,
       result,
     };
     window.sessionStorage.setItem(PROTEOME_MAPPING_SESSION_KEY, JSON.stringify(nextState));
-  }, [negativeFileName, outputFolderName, positiveFileName, proteomeFileName, qCutoffValue, result, topNValue, wildcards]);
+  }, [negativeFileName, outputFolderName, positiveFileName, proteomeFileName, qCutoffValue, result, topNValue]);
 
   useEffect(() => {
     if (!handoffState?.resultId || !handoffState.positiveFilename || !handoffState.negativeFilename) {
@@ -123,7 +120,7 @@ export function Module3MappingPage() {
         setHandoffError(null);
       } catch {
         if (!cancelled) {
-          setHandoffError("Unable to attach the K-mer U-test files automatically. You can upload them manually.");
+          setHandoffError("Unable to attach the tetramer U-test files automatically. You can upload them manually.");
         }
       }
     };
@@ -163,7 +160,6 @@ export function Module3MappingPage() {
     if (parsedTopN !== null) {
       formData.append("top_n", String(parsedTopN));
     }
-    formData.append("wildcards", String(wildcards));
     formData.append("q_cutoff", String(parsedQCutoff));
 
     const response = await execute(formData);
@@ -192,7 +188,7 @@ export function Module3MappingPage() {
     <div className="page-grid proteome-page">
       <SectionCard
         title="Proteome Mapping"
-        description="Map significant positive and negative k-mers onto a local proteome FASTA and download the bundled mapping outputs."
+        description="Map significant exact tetramers onto a local proteome FASTA and download the bundled mapping outputs. Wildcards are not supported."
       >
         <form className="proteome-form" onSubmit={handleSubmit}>
           <section className="proteome-section">
@@ -236,7 +232,7 @@ export function Module3MappingPage() {
                   <div>
                     <span className="upload-card__label">Negative significance file</span>
                     <p className="upload-card__helper">
-                      Upload the matching negative significance file with the same k-mer length.
+                      Upload the matching negative tetramer significance file.
                     </p>
                   </div>
                   <label className="upload-trigger" htmlFor="proteome-negative-file">
@@ -265,7 +261,7 @@ export function Module3MappingPage() {
                   <div>
                     <span className="upload-card__label">Proteome FASTA file</span>
                     <p className="upload-card__helper">
-                      Local FASTA only. Proteome Mapping will build the required k-mer index from this file.
+                      Local FASTA only. Proteome Mapping will build the required tetramer index from this file.
                     </p>
                   </div>
                   <label className="upload-trigger" htmlFor="proteome-fasta-file">
@@ -335,14 +331,6 @@ export function Module3MappingPage() {
               </label>
             </div>
 
-            <label className="form-field form-checkbox settings-toggle">
-              <input
-                type="checkbox"
-                checked={wildcards}
-                onChange={(event) => setWildcards(event.target.checked)}
-              />
-              <span>Enable wildcard X matching</span>
-            </label>
           </section>
 
           <div className="proteome-actions">
@@ -355,7 +343,7 @@ export function Module3MappingPage() {
 
         {error && <StatusBanner tone="error" title="Proteome Mapping failed" message={error} />}
         {handoffError && !error && (
-          <StatusBanner tone="error" title="K-mer file handoff failed" message={handoffError} />
+          <StatusBanner tone="error" title="Tetramer file handoff failed" message={handoffError} />
         )}
         {result && !error && (
           <StatusBanner
@@ -388,10 +376,6 @@ export function Module3MappingPage() {
                 <tr>
                   <td>Output folder name</td>
                   <td>{result.output_folder_name}</td>
-                </tr>
-                <tr>
-                  <td>Wildcard matching</td>
-                  <td>{result.wildcards ? "Enabled" : "Disabled"}</td>
                 </tr>
                 <tr>
                   <td>q_cutoff</td>

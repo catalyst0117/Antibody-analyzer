@@ -14,7 +14,9 @@ from LocalProteomeDB import LocalProteomeDB
 from local_mapping import map_local_kmers
 
 
-AA_PATTERN_WITH_WILDCARD = re.compile(r"^[A-Z]+$")
+TETRAMER_LENGTH = 4
+AA_SEQUENCE_PATTERN = re.compile(r"^[A-Z]+$")
+CANONICAL_AA_PATTERN = re.compile(r"^[ACDEFGHIKLMNPQRSTVWY]+$")
 
 
 def _normalize_header_name(name: str) -> str:
@@ -58,7 +60,7 @@ def _find_sequence_column(df: pd.DataFrame) -> str:
 
         sample = series.head(200)
         normalized_values = [_normalize_kmer_value(v) for v in sample]
-        alpha_values = [v for v in normalized_values if v and AA_PATTERN_WITH_WILDCARD.fullmatch(v)]
+        alpha_values = [v for v in normalized_values if v and AA_SEQUENCE_PATTERN.fullmatch(v)]
         if not alpha_values:
             continue
 
@@ -149,11 +151,13 @@ def extract_kmer_list(input_path, output_txt, top_n: Optional[int] = None):
     df = df[df[seq_col] != ""]
 
     inferred_k = _infer_single_k_from_series(df[seq_col])
+    if inferred_k != TETRAMER_LENGTH:
+        raise ValueError("Proteome Mapping supports only exact tetramers (k=4).")
 
-    bad_rows = df[~df[seq_col].str.fullmatch(r"[A-Z]+")]
+    bad_rows = df[~df[seq_col].str.fullmatch(CANONICAL_AA_PATTERN)]
     if not bad_rows.empty:
         raise ValueError(
-            f"Detected non-alphabetic sequence values in column '{seq_col}'. "
+            f"Detected non-canonical or wildcard sequence values in column '{seq_col}'. "
             f"Example values: {bad_rows[seq_col].head(5).tolist()}"
         )
 
@@ -206,8 +210,7 @@ def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
     universe_size = 20**k
     expected hits = max(L-k+1, 0) * (K / 20**k)
 
-    Wildcards are intentionally not expanded here. The goal is to keep the same
-    simple baseline as before, now generalized from fixed 4-mers to arbitrary k.
+    Inputs are exact tetramers, so the universe size is always 20**4.
     """
     df = pd.read_csv(dict_csv_path)
     if df.empty:
@@ -288,6 +291,8 @@ def run_mapping(
 
     This version intentionally excludes SQL mode and old check-only helpers.
     """
+    if wildcards:
+        raise ValueError("Wildcard matching is not supported.")
     os.makedirs(out_dir, exist_ok=True)
 
     clean_pos = os.path.join(out_dir, "clean_pos.txt")
@@ -300,10 +305,9 @@ def run_mapping(
     clean_pos, pos_k, pos_seq_col, pos_q_col = extract_kmer_list(pos_sig_path, clean_pos, top_n=top_n)
     clean_neg, neg_k, neg_seq_col, neg_q_col = extract_kmer_list(neg_sig_path, clean_neg, top_n=top_n)
 
-    if pos_k != neg_k:
+    if pos_k != TETRAMER_LENGTH or neg_k != TETRAMER_LENGTH:
         raise ValueError(
-            f"Positive and negative files produced different k values: {pos_k} vs {neg_k}. "
-            "Run Module 3 separately for each k."
+            "Proteome Mapping supports only exact tetramers (k=4)."
         )
 
     proteome = LocalProteomeDB(fasta_path)
@@ -330,19 +334,19 @@ def run_mapping(
 
 
 if __name__ == "__main__":
-    POS_SIG = "/Users/ciao/Downloads/Wildcard_test/SI_file1_U_test_5mers_3_AD.csv"
-    NEG_SIG = "/Users/ciao/Downloads/Wildcard_test/SI_file1_U_test_5mers_3_NC.csv"
+    POS_SIG = '/Users/ciao/Desktop/module2_test_FDR/sal_stool/Sal_Stool_2021_SI_1_U_test_4mers_[]_Sal.csv'
+    NEG_SIG = '/Users/ciao/Desktop/module2_test_FDR/sal_stool/Sal_Stool_2021_SI_1_U_test_4mers_[]_Stool.csv'
     FASTA_PATH = "/Users/ciao/Desktop/module3_test/UinProtHumanProteoCanonicalComplete.fasta.txt"
-    OUT_DIR = "/Users/ciao/Downloads/Wildcard_test/"
-    top_n = 50
+    OUT_DIR = "/Users/ciao/Desktop/module2_test_FDR/sal_stool"
+    top_n = 500
 
     run_mapping(
         POS_SIG,
         NEG_SIG,
         FASTA_PATH,
         OUT_DIR,
-        top_n=top_n,
-        wildcards=True,
+        #top_n=top_n,
+        wildcards=False,
         q_cutoff=0.01,
     )
 

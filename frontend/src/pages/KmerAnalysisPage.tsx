@@ -23,9 +23,7 @@ type KmerSessionState = {
   negativeFileName: string | null;
   positiveKeyword: string;
   negativeKeyword: string;
-  kValue: string;
   archiveName: string;
-  wildcards: string;
   normalize: boolean;
   maxZeroPercentage: string;
   result: KmerResponse | null;
@@ -61,9 +59,7 @@ export function KmerAnalysisPage() {
   const [negativeFileName, setNegativeFileName] = useState<string | null>(savedState?.negativeFileName ?? null);
   const [positiveKeyword, setPositiveKeyword] = useState(savedState?.positiveKeyword ?? "AD");
   const [negativeKeyword, setNegativeKeyword] = useState(savedState?.negativeKeyword ?? "NC");
-  const [kValue, setKValue] = useState(savedState?.kValue ?? "4");
   const [archiveName, setArchiveName] = useState(savedState?.archiveName ?? "");
-  const [wildcards, setWildcards] = useState(savedState?.wildcards ?? "");
   const [normalize, setNormalize] = useState(savedState?.normalize ?? true);
   const [maxZeroPercentage, setMaxZeroPercentage] = useState(
     savedState?.maxZeroPercentage ?? "100",
@@ -80,14 +76,12 @@ export function KmerAnalysisPage() {
     }
     const nextState: KmerSessionState = {
       inputMode,
-      kValue,
       dataFileName,
       positiveFileName,
       negativeFileName,
       positiveKeyword,
       negativeKeyword,
       archiveName,
-      wildcards,
       normalize,
       maxZeroPercentage,
       result,
@@ -102,7 +96,6 @@ export function KmerAnalysisPage() {
     dataFileName,
     error,
     inputMode,
-    kValue,
     loading,
     maxZeroPercentage,
     negativeFileName,
@@ -113,7 +106,6 @@ export function KmerAnalysisPage() {
     result,
     taskId,
     taskStatus,
-    wildcards,
   ]);
 
   useEffect(() => {
@@ -176,38 +168,6 @@ export function KmerAnalysisPage() {
       alert("Upload both positive and negative cohort files.");
       return;
     }
-    const parsedK = Number.parseInt(kValue, 10);
-    if (!Number.isInteger(parsedK) || parsedK < 4 || parsedK > 10) {
-      setError("k-mer size must be an integer between 4 and 10.");
-      return;
-    }
-
-    const wildcardTokens = wildcards
-      .split(",")
-      .map((token) => token.trim())
-      .filter(Boolean);
-    if (wildcardTokens.some((token) => !/^\d+$/.test(token))) {
-      setError("Wildcard positions must be comma-separated integers.");
-      return;
-    }
-    const wildcardValues = wildcardTokens.map(Number);
-    if (new Set(wildcardValues).size !== wildcardValues.length) {
-      setError("Wildcard positions must be unique.");
-      return;
-    }
-    if (wildcardValues.some((position) => position < 0 || position >= parsedK)) {
-      setError(`Wildcard positions must be between 0 and ${parsedK - 1}.`);
-      return;
-    }
-    const combinationCount = 20 ** (parsedK - wildcardValues.length);
-    if (combinationCount > 1_000_000) {
-      setError(
-        `This configuration requires ${combinationCount.toLocaleString()} prebuilt k-mers. ` +
-          "Reduce k or add wildcard positions to stay at or below 1,000,000.",
-      );
-      return;
-    }
-
     const parsedMaxZeroPercentage = Number.parseFloat(maxZeroPercentage);
     if (
       !Number.isFinite(parsedMaxZeroPercentage) ||
@@ -229,9 +189,8 @@ export function KmerAnalysisPage() {
       formData.append("positive_file", positiveFile);
       formData.append("negative_file", negativeFile);
     }
-    formData.append("k", String(parsedK));
+    formData.append("k", "4");
     formData.append("archive_name", archiveName);
-    formData.append("wildcard_positions", wildcards);
     formData.append("normalize", String(normalize));
     formData.append("max_zero_percentage", String(parsedMaxZeroPercentage));
 
@@ -310,8 +269,8 @@ export function KmerAnalysisPage() {
   return (
     <div className="page-grid">
       <SectionCard
-        title="K-mer enrichment analysis"
-        description="Build the complete k-mer universe, apply product-based chi-square filtering to each sample, and run Mann–Whitney U tests."
+        title="Tetramer enrichment analysis"
+        description="Build the complete exact tetramer universe, apply product-based chi-square filtering to each sample, and run Mann–Whitney U tests. Wildcards are not supported."
       >
         <form className="form-grid" onSubmit={handleSubmit}>
           <fieldset className="form-field input-mode-group">
@@ -405,21 +364,6 @@ export function KmerAnalysisPage() {
             </div>
           )}
 
-          <div className="form-field form-field--inline">
-            <label>
-              <span>k-mer size</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={kValue}
-                onChange={(event) => setKValue(event.target.value)}
-                placeholder="4"
-              />
-              <small>Enter one integer between 4 and 10.</small>
-            </label>
-          </div>
-
           <label className="form-field">
             <span>Download bundle name</span>
             <input
@@ -429,17 +373,6 @@ export function KmerAnalysisPage() {
               placeholder="e.g. patient_cohort_k4_results"
             />
             <small>Optional. Used as the ZIP filename when users download the result bundle.</small>
-          </label>
-
-          <label className="form-field">
-            <span>Wildcard positions</span>
-            <input
-              type="text"
-              placeholder="e.g. 1,3"
-              value={wildcards}
-              onChange={(event) => setWildcards(event.target.value)}
-            />
-            <small>Leave empty for strict k-mers. Use unique, comma-separated, zero-indexed positions.</small>
           </label>
 
           <label className="form-field">
@@ -487,11 +420,11 @@ export function KmerAnalysisPage() {
           </div>
         )}
 
-        {error && <StatusBanner tone="error" title="K-mer analysis failed" message={error} />}
+        {error && <StatusBanner tone="error" title="Tetramer analysis failed" message={error} />}
         {result && !error && (
           <StatusBanner
             tone="success"
-            title="K-mer analysis ready"
+            title="Tetramer analysis ready"
             message="Download the completed analysis outputs, including the interactive volcano plot."
           />
         )}
@@ -500,7 +433,7 @@ export function KmerAnalysisPage() {
       {runs.length > 0 && result && (
         <SectionCard
           title="Mann–Whitney summaries"
-          description="Highlights the number of kmers enriched in each cohort for the selected k value."
+          description="Highlights the number of exact tetramers enriched in each cohort."
           actions={
             <div className="section-card__actions-group">
               <Link to="/module3" state={proteomeMappingState} className="secondary-button">
@@ -514,8 +447,8 @@ export function KmerAnalysisPage() {
             <table>
               <thead>
                 <tr>
-                  <th>k-mer size</th>
-                  <th>Total kmers</th>
+                  <th>Tetramer size</th>
+                  <th>Total tetramers</th>
                   <th>Positive-elevated</th>
                   <th>Negative-elevated</th>
                   <th>Files</th>

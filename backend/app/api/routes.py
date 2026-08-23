@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from app.core.fastq_processing import FastqProcessor
-from app.core.kmer_analysis import analyze_single_k, split_input_by_group
+from app.core.kmer_analysis import TETRAMER_LENGTH, analyze_single_k, split_input_by_group
 from app.core.module3_mapping import resolve_output_folder_name, run_module3_mapping
 from app.models.responses import (
     FastqResponse,
@@ -230,8 +230,8 @@ async def analyze_kmers(
     store: ResultStore = Depends(get_store),
     task_store: KmerTaskStore = Depends(get_kmer_task_store),
 ) -> KmerTaskCreatedResponse:
-    if k < 4:
-        raise HTTPException(status_code=400, detail="k must be >= 4.")
+    if k != TETRAMER_LENGTH:
+        raise HTTPException(status_code=400, detail="Only exact tetramers (k=4) are supported.")
     if input_mode not in {"merged", "separate"}:
         raise HTTPException(status_code=400, detail="input_mode must be 'merged' or 'separate'.")
     if input_mode == "merged" and data_file is None:
@@ -244,11 +244,9 @@ async def analyze_kmers(
             detail="max_zero_percentage must be between 0 and 100.",
         )
 
-    wildcard_positions_list = [
-        int(pos.strip())
-        for pos in wildcard_positions.split(",")
-        if pos.strip()
-    ]
+    if wildcard_positions.strip():
+        raise HTTPException(status_code=400, detail="Wildcard positions are not supported.")
+    wildcard_positions_list: List[int] = []
     data_bytes = await data_file.read() if data_file else None
     data_filename = (data_file.filename or "patient_data.xlsx") if data_file else None
     positive_bytes = await positive_file.read() if positive_file else None
@@ -314,6 +312,8 @@ async def module3_map(
     output_folder_name: str = Form(""),
     store: ResultStore = Depends(get_store),
 ) -> Module3Response:
+    if wildcards:
+        raise HTTPException(status_code=400, detail="Wildcard matching is not supported.")
     if top_n is not None and top_n <= 0:
         raise HTTPException(status_code=400, detail="top_n must be greater than 0.")
     if q_cutoff < 0 or q_cutoff > 1:

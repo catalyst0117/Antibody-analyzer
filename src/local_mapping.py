@@ -44,16 +44,9 @@ def map_local_kmers(
     wildcards=False,
     q_cutoff=0.01,
 ):
-    """
-    Local FASTA proteome mapper, generalized to k-mer-aware input.
-
-    Wildcard behavior:
-      - if wildcards=False, everything is treated as exact string matching
-      - if wildcards=True, any k-mer containing 'X' is matched as a wildcard
-        pattern, where X can be any amino acid
-      - wildcard matching is done by anchor-based scanning, not by expanding
-        X into every possible amino-acid combination
-    """
+    """Map exact canonical tetramers against a local FASTA proteome."""
+    if wildcards:
+        raise ValueError("Wildcard matching is not supported.")
 
     data = {}
     total_count = 0
@@ -75,6 +68,12 @@ def map_local_kmers(
             total_count += 1
 
             if qv <= q_cutoff:
+                if len(kmer) != 4:
+                    raise ValueError("Proteome Mapping supports only exact tetramers (k=4).")
+                if "X" in kmer:
+                    raise ValueError("Wildcard X is not supported.")
+                if any(residue not in "ACDEFGHIKLMNPQRSTVWY" for residue in kmer):
+                    raise ValueError(f"Non-canonical tetramer is not supported: {kmer}")
                 data[kmer] = qv
                 kept_count += 1
                 kept_lengths.add(len(kmer))
@@ -104,19 +103,12 @@ def map_local_kmers(
     k = next(iter(kept_lengths))
     db.ensure_k(k)
 
-    wildcard_count = sum(1 for x in data if "X" in x)
     print(f"Loaded {total_count} kmers, kept {kept_count} with q ≤ {q_cutoff}")
     print(f"Detected k={k} from input content")
     print(f"Mapping {len(data)} {k}-mers using local proteome...")
-    if wildcards:
-        print(f"Wildcard mode ON: {wildcard_count} pattern(s) contain X")
-
     protein_hits = defaultdict(list)
     for kmer, qv in tqdm(data.items(), desc=f"Mapping {k}-mers"):
-        if wildcards and "X" in kmer:
-            hits = db.search_pattern(kmer, k)
-        else:
-            hits = db.search_kmer(kmer, k)
+        hits = db.search_kmer(kmer, k)
 
         for pid, pos in hits:
             protein_hits[pid].append((kmer, pos, qv))
