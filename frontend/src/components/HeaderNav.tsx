@@ -16,7 +16,7 @@ export function HeaderNav({ currentPath }: HeaderNavProps) {
       <div className="brand">
         <span className="brand-logo" aria-hidden>🧬</span>
         <div>
-          <h1>Antibody Analyzer</h1>
+          <h1>ATPT (Antibody Target Prediction Tool)</h1>
           <p className="brand-tagline">Web interface for the sequencing modules</p>
         </div>
       </div>
