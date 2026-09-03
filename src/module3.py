@@ -202,9 +202,9 @@ def _count_unique_kmers_from_clean_txt(clean_txt_path: str) -> tuple[int, int]:
 
 def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
     """
-    Adds 2 columns to DictFile*.csv:
-      - ExpectedRandomHits
-      - Hits/ExpectedRandomHits
+        Adds 2 columns to DictFile*.csv:
+            - Exp Hits
+            - Obs/Exp
 
     K = number of unique input k-mers
     universe_size = 20**k
@@ -220,7 +220,7 @@ def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
     length_col = None
     for c in df.columns:
         if str(c).strip().lower() in {
-            "length of the protein", "protein length", "proteinlength", "length_aa", "length"
+            "protein", "length of the protein", "protein length", "proteinlength", "length_aa", "length"
         }:
             length_col = c
             break
@@ -237,7 +237,7 @@ def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
 
     hits_col = None
     for c in df.columns:
-        if str(c).strip().lower() in {"# of hits", "hits", "hit", "hit_count", "hitcount", "num_hits"}:
+        if str(c).strip().lower() in {"# hits", "# of hits", "hits", "hit", "hit_count", "hitcount", "num_hits"}:
             hits_col = c
             break
     if hits_col is None:
@@ -260,8 +260,8 @@ def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
         windows = max(L - k + 1, 0)
         return windows * p
 
-    expected_col = "ExpectedRandomHits"
-    ratio_col = "Hits/ExpectedRandomHits"
+    expected_col = "Exp Hits"
+    ratio_col = "Obs/Exp"
 
     df[expected_col] = df[length_col].apply(_expected)
 
@@ -273,6 +273,21 @@ def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
         return float(obs) / float(exp)
 
     df[ratio_col] = df.apply(_ratio, axis=1)
+    preferred_order = [
+        "Protein Description",
+        "GeneName",
+        "Q score",
+        "Protein",
+        "# hits",
+        "Hits/AA",
+        "Seq cover",
+        "AA Cover",
+        expected_col,
+        ratio_col,
+        "K-mer, Position",
+    ]
+    if all(column in df.columns for column in preferred_order):
+        df = df[preferred_order]
     df.to_csv(dict_csv_path, index=False)
     print(f"✔ Added random-hit expectation columns to: {dict_csv_path}")
 

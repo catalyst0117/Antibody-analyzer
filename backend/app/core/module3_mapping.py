@@ -78,7 +78,7 @@ def build_run_summary_text(
 
     return "\n".join(
         [
-            "Proteome Mapping Outputs",
+            "ATPT (Antibody Target Prediction Tool) Outputs",
             "",
             "These files are included in the downloadable ZIP bundle.",
             "",

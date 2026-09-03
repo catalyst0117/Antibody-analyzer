@@ -1,6 +1,16 @@
 import pandas as pd
 from collections import defaultdict
+import re
 from tqdm import tqdm
+
+
+GENE_NAME_PATTERN = re.compile(r"(?:^|\s)GN=([^\s]+).*?(?:\s|^)PE=", re.IGNORECASE)
+
+
+def extract_gene_name(description):
+    """Extract the FASTA gene name between GN= and PE= tags."""
+    match = GENE_NAME_PATTERN.search(str(description))
+    return match.group(1) if match else ""
 
 
 def compute_sequence_coverage(hits, protein_length):
@@ -81,13 +91,16 @@ def map_local_kmers(
     if not data:
         print(f"Loaded {total_count} kmers, kept 0 with q ≤ {q_cutoff}")
         df = pd.DataFrame(columns=[
-            "Description",
+            "Protein Description",
+            "GeneName",
             "Q score",
-            "Length of the Protein",
-            "# of hits",
-            "Hits/Protein length",
-            "Sequence coverage",
-            "Covered amino acids",
+            "Protein",
+            "# hits",
+            "Hits/AA",
+            "Seq cover",
+            "AA Cover",
+            "Exp Hits",
+            "Obs/Exp",
             "K-mer, Position",
         ])
         df.to_csv(out_path, index=False)
@@ -126,6 +139,7 @@ def map_local_kmers(
 
         rows.append([
             desc,
+            extract_gene_name(desc),
             z,
             plen,
             len(hits_sorted),
@@ -136,13 +150,14 @@ def map_local_kmers(
         ])
 
     df = pd.DataFrame(rows, columns=[
-        "Description",
+        "Protein Description",
+        "GeneName",
         "Q score",
-        "Length of the Protein",
-        "# of hits",
-        "Hits/Protein length",
-        "Sequence coverage",
-        "Covered amino acids",
+        "Protein",
+        "# hits",
+        "Hits/AA",
+        "Seq cover",
+        "AA Cover",
         "K-mer, Position",
     ])
 
