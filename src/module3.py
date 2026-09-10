@@ -178,7 +178,10 @@ def extract_kmer_list(input_path, output_txt, top_n: Optional[int] = None):
     )
     return output_txt, inferred_k, seq_col, q_col
 
-def _count_unique_kmers_from_clean_txt(clean_txt_path: str) -> tuple[int, int]:
+def _count_unique_kmers_from_clean_txt(
+    clean_txt_path: str,
+    q_cutoff: Optional[float] = None,
+) -> tuple[int, int]:
     kmers = set()
     lengths = set()
     with open(clean_txt_path, "r") as f:
@@ -186,7 +189,14 @@ def _count_unique_kmers_from_clean_txt(clean_txt_path: str) -> tuple[int, int]:
             line = line.strip()
             if not line:
                 continue
-            kmer = line.split("\t")[0].strip().upper()
+            parts = line.split("\t")
+            if q_cutoff is not None and len(parts) > 1:
+                try:
+                    if float(parts[1]) > q_cutoff:
+                        continue
+                except ValueError:
+                    continue
+            kmer = parts[0].strip().upper()
             if kmer:
                 kmers.add(kmer)
                 lengths.add(len(kmer))
@@ -200,7 +210,11 @@ def _count_unique_kmers_from_clean_txt(clean_txt_path: str) -> tuple[int, int]:
     return len(kmers), next(iter(lengths))
 
 
-def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
+def add_random_expected_hits(
+    dict_csv_path: str,
+    clean_txt_path: str,
+    q_cutoff: Optional[float] = None,
+) -> None:
     """
         Adds 2 columns to DictFile*.csv:
             - Exp Hits
@@ -246,7 +260,7 @@ def add_random_expected_hits(dict_csv_path: str, clean_txt_path: str) -> None:
             raise ValueError(f"Could not find a '# of hits' numeric column in {dict_csv_path}.")
         hits_col = numeric_cols[0]
 
-    K, k = _count_unique_kmers_from_clean_txt(clean_txt_path)
+    K, k = _count_unique_kmers_from_clean_txt(clean_txt_path, q_cutoff=q_cutoff)
     universe_size = 20 ** k
     p = K / universe_size
 
@@ -334,8 +348,8 @@ def run_mapping(
         clean_neg, proteome, neg_out, wildcards=wildcards, q_cutoff=q_cutoff
     )
 
-    add_random_expected_hits(pos_out, clean_pos)
-    add_random_expected_hits(neg_out, clean_neg)
+    add_random_expected_hits(pos_out, clean_pos, q_cutoff=q_cutoff)
+    add_random_expected_hits(neg_out, clean_neg, q_cutoff=q_cutoff)
 
     with open(man_pos, "w") as f:
         json.dump(mp1, f)
