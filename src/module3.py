@@ -231,7 +231,7 @@ def add_random_expected_hits(
     length_col = None
     for c in df.columns:
         if str(c).strip().lower() in {
-            "protein", "length of the protein", "protein length", "proteinlength", "length_aa", "length"
+            "protlen", "protein", "length of the protein", "protein length", "proteinlength", "length_aa", "length"
         }:
             length_col = c
             break
@@ -288,7 +288,7 @@ def add_random_expected_hits(
         "Protein Description",
         "GeneName",
         "Q score",
-        "Protein",
+        "ProtLen",
         "# hits",
         "Hits/AA",
         "Seq cover",

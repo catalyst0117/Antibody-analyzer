@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { label: "FASTQ Processor", path: "/fastq" },
   { label: "K-mer Analysis", path: "/kmer" },
   { label: "Proteome Mapping", path: "/module3" },
+  { label: "About", path: "/about" },
 ];
 
 export function HeaderNav({ currentPath }: HeaderNavProps) {
