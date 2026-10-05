@@ -2,7 +2,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { Link } from "react-router-dom";
 const NAV_ITEMS = [
     { label: "FASTQ Processor", path: "/fastq" },
-    { label: "K-mer Analysis", path: "/kmer" },
+    { label: "Tetramer Analysis", path: "/kmer" },
     { label: "Proteome Mapping", path: "/module3" },
     { label: "About", path: "/about" },
 ];

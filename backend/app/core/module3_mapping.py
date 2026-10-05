@@ -108,6 +108,8 @@ def run_module3_mapping(
     wildcards: bool,
     q_cutoff: float,
 ) -> Module3Result:
+    if wildcards:
+        raise ValueError("Wildcard matching is not supported.")
     module3 = _load_module3_module()
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -14,6 +14,7 @@ from statsmodels.stats.multitest import multipletests
 from tqdm import tqdm
 
 CANONICAL_AA = "ACDEFGHIKLMNPQRSTVWY"
+TETRAMER_LENGTH = 4
 AA_BACKGROUND = {
     "X": 0.0,
     "S": 0.08621733200464735,
@@ -85,23 +86,22 @@ def prebuild_kmers(
     alphabet: str = CANONICAL_AA,
     max_combinations: int = DEFAULT_MAX_COMBINATIONS,
 ) -> Tuple[str, ...]:
-    """Return every ordered k-mer combination, fixing wildcard positions to X."""
-    if kmer_length <= 0:
-        raise ValueError("kmer_length must be positive.")
+    """Return the complete universe of exact canonical tetramers."""
+    if kmer_length != TETRAMER_LENGTH:
+        raise ValueError("Only exact tetramers (k=4) are supported.")
     if not alphabet or len(set(alphabet)) != len(alphabet):
         raise ValueError("alphabet must contain unique amino-acid symbols.")
 
     wildcard_set = set(wildcard_positions or [])
-    invalid = sorted(position for position in wildcard_set if not 0 <= position < kmer_length)
-    if invalid:
-        raise ValueError(f"Wildcard positions outside the k-mer: {invalid}")
+    if wildcard_set:
+        raise ValueError("Wildcard positions are not supported.")
 
     variable_count = kmer_length - len(wildcard_set)
     combination_count = len(alphabet) ** variable_count
     if combination_count > max_combinations:
         raise ValueError(
             f"Prebuilding {combination_count:,} k-mers exceeds the configured limit "
-            f"of {max_combinations:,}. Reduce k, add wildcards, or explicitly raise "
+            f"of {max_combinations:,}. Explicitly raise "
             "max_combinations if enough memory is available."
         )
 
@@ -121,11 +121,13 @@ def calculate_expected_frequency(
     total_count: int,
     aa_background: Dict[str, float] = AA_BACKGROUND,
 ) -> float:
-    """Calculate E = T * product(p(aa)), ignoring generated X wildcards."""
+    """Calculate E = T * product(p(aa)) for an exact tetramer."""
+    if len(kmer) != TETRAMER_LENGTH:
+        raise ValueError("Expected-frequency calculation supports only tetramers.")
+    if "X" in kmer:
+        raise ValueError("Wildcard X is not supported.")
     expected = float(total_count)
     for amino_acid in kmer:
-        if amino_acid == "X":
-            continue
         frequency = aa_background.get(amino_acid)
         if frequency is None:
             return 0.0
@@ -280,6 +282,11 @@ def _iter_patient_raw_counts(
         for sequence, count in zip(data[sequence_column], data[count_column]):
             if pd.isna(sequence) or pd.isna(count) or not isinstance(sequence, str):
                 continue
+            sequence = sequence.strip().upper()
+            if "X" in sequence:
+                raise ValueError(
+                    f"Wildcard X is not supported (sample {patient!r})."
+                )
             try:
                 count = int(count)
             except (TypeError, ValueError):
@@ -311,7 +318,7 @@ def tile_patient_file(
     max_combinations: int = DEFAULT_MAX_COMBINATIONS,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> CohortTilingResult:
-    """Tile and product-filter every sample independently."""
+    """Tile and product-filter every sample into exact tetramers."""
     path = Path(path)
     wildcard_positions = sorted(set(wildcard_positions or []))
     universe = prebuild_kmers(
@@ -570,7 +577,7 @@ def analyze_single_k(
     negative_label: str = "NC",
     progress_callback: Optional[ProgressCallback] = None,
 ) -> MannWhitneyResult:
-    """Analyze a single k value for both cohorts.
+    """Analyze exact tetramers for both cohorts.
 
     This is the main entry point for analysis.
     """
@@ -578,6 +585,10 @@ def analyze_single_k(
     workdir.mkdir(parents=True, exist_ok=True)
 
     wildcard_positions = list(wildcard_positions or [])
+    if k != TETRAMER_LENGTH:
+        raise ValueError("Only exact tetramers (k=4) are supported.")
+    if wildcard_positions:
+        raise ValueError("Wildcard positions are not supported.")
     if not 0 <= max_zero_percentage <= 100:
         raise ValueError("max_zero_percentage must be between 0 and 100.")
 
@@ -661,14 +672,19 @@ def analyze_groups(
     max_zero_percentage: float = 100.0,
     workdir: Optional[Path] = None,
 ) -> List[MannWhitneyResult]:
-    """Run analysis for multiple k values."""
+    """Compatibility wrapper that accepts only one exact tetramer run."""
     workdir = Path(workdir or input_path.parent)
     workdir.mkdir(parents=True, exist_ok=True)
 
     wildcard_positions = list(wildcard_positions or [])
+    requested_k_values = list(k_values)
+    if requested_k_values != [TETRAMER_LENGTH]:
+        raise ValueError("Only one exact tetramer analysis (k=4) is supported.")
+    if wildcard_positions:
+        raise ValueError("Wildcard positions are not supported.")
     results: List[MannWhitneyResult] = []
 
-    for k in tqdm(list(k_values), desc="Processing k values"):
+    for k in requested_k_values:
         results.append(
             analyze_single_k(
                 input_path,
@@ -691,6 +707,7 @@ __all__ = [
     "CHI_SQUARE_THRESHOLD",
     "CohortTilingResult",
     "MannWhitneyResult",
+    "TETRAMER_LENGTH",
     "analyze_groups",
     "analyze_single_k",
     "apply_chi_square_filter",
