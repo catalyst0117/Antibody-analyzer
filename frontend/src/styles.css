@@ -92,6 +92,26 @@ body {
   color: #64748b;
 }
 
+.about-copy,
+.about-contact {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+  max-width: none;
+  line-height: 1.6;
+  color: #334155;
+  text-align: justify;
+}
+
+.about-copy p,
+.about-contact p {
+  margin: 0;
+}
+
+.about-contact a {
+  color: #1d4ed8;
+}
+
 .page-grid {
   display: flex;
   flex-direction: column;

@@ -470,8 +470,9 @@ def run_mannwhitney(
     negative_label: str = "NC",
     tested_kmers: Sequence[str] | None = None,
     progress_callback: Optional[ProgressCallback] = None,
+    normalize: bool = True,
 ) -> MannWhitneyResult:
-    """Test the union of passing k-mers using normalized filtered values.
+    """Test the union of passing k-mers using filtered values.
 
     The directional AD/NC files apply significance cutoff to raw p-value.
     """
@@ -498,11 +499,11 @@ def run_mannwhitney(
         tested_kmers,
     )
 
-    # Normalize for Mann-Whitney testing
-    for patient in positive_patients:
-        positive_matrix[patient] /= positive.totals[patient]
-    for patient in negative_patients:
-        negative_matrix[patient] /= negative.totals[patient]
+    if normalize:
+        for patient in positive_patients:
+            positive_matrix[patient] /= positive.totals[patient]
+        for patient in negative_patients:
+            negative_matrix[patient] /= negative.totals[patient]
 
     p_values = []
     mean_rank_differences = []
@@ -653,6 +654,7 @@ def analyze_single_k(
         negative_label=negative_label,
         tested_kmers=output_kmers,
         progress_callback=progress_callback,
+        normalize=normalize,
     )
 
     if progress_callback:
